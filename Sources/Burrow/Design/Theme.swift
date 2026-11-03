@@ -37,13 +37,15 @@ struct GlowCard<Content: View>: View {
     var glow: Glow = .graphite
     var style: GlowStyle = .core
     var padding: CGFloat = 22
+    /// Mole is working for this card (a scan): its light breathes until the work ends.
+    var busy = false
     @ViewBuilder var content: Content
 
     var body: some View {
         content
             .padding(padding)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background { GlowSurface(glow: glow, style: style) }
+            .background { GlowSurface(glow: glow, style: style, busy: busy) }
             .clipShape(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous))
             .overlay {
                 RoundedRectangle(cornerRadius: Theme.radius, style: .continuous)
@@ -59,9 +61,12 @@ struct GlowCard<Content: View>: View {
 struct GlowSurface: View {
     let glow: Glow
     let style: GlowStyle
+    var busy = false
     /// The light fills in once when the card appears (a page visit, a new panel), then holds
     /// still: a one-off animation, so nothing redraws while the window idles.
     @ViewState private var lit = Motion.reduced
+    /// While busy the dark core thins and returns, so the light swells in from the edges and recedes.
+    @ViewState private var breath = false
 
     var body: some View {
         GeometryReader { geo in
@@ -72,10 +77,22 @@ struct GlowSurface: View {
                     // Coloured edges with a dark, soft core.
                     glow.color.opacity(lit ? 1 : 0.25)
                     // The dark core starts over the whole card and settles, so the colour creeps in from the edges.
-                    RadialGradient(colors: [.black.opacity(0.92), .black.opacity(0.55), .clear],
-                                   center: .init(x: 0.5, y: 0.55), startRadius: 0, endRadius: side * 0.55)
-                        .blur(radius: 18)
-                        .scaleEffect(lit ? 1 : 2.2, anchor: .init(x: 0.5, y: 0.55))
+                    if geo.size.height < 200 {
+                        // A short card (a prompt, the deleted-app panel, a selection bar): a round core would
+                        // cover its top and bottom and light only the ends, so the core follows the card's shape.
+                        // Two soft-edged bands, across and down; where they cross is the core.
+                        let fade = min(geo.size.height * 0.45, 48)
+                        Color.black.opacity(0.8)
+                            .mask(Self.band(fade / max(geo.size.width, 1), .leading, .trailing))
+                            .mask(Self.band(fade / max(geo.size.height, 1), .top, .bottom))
+                            .scaleEffect(lit ? 1 : 1.5)
+                    } else {
+                        RadialGradient(colors: [.black.opacity(0.92), .black.opacity(0.55), .clear],
+                                       center: .init(x: 0.5, y: 0.55), startRadius: 0, endRadius: side * 0.55)
+                            .blur(radius: 18)
+                            .scaleEffect(lit ? 1 : 2.2, anchor: .init(x: 0.5, y: 0.55))
+                            .opacity(breath ? 0.5 : 1)
+                    }
                 case .core:
                     // Dark card lit from inside.
                     Color(white: 0.06)
@@ -94,6 +111,20 @@ struct GlowSurface: View {
             guard !lit else { return }
             withAnimation(.easeOut(duration: 1.4).delay(0.08)) { lit = true }
         }
+        // Repeats only while the work lasts, then settles; Reduce Motion keeps it still.
+        .onChange(of: busy, initial: true) { _, busy in
+            guard !Motion.reduced else { return }
+            withAnimation(busy ? .easeInOut(duration: 1.8).repeatForever(autoreverses: true) : .easeOut(duration: 0.8)) { breath = busy }
+        }
+    }
+
+    /// Clear at both ends, solid in between, with an eased fade `edge` (a fraction of the length) long.
+    private static func band(_ edge: CGFloat, _ start: UnitPoint, _ end: UnitPoint) -> LinearGradient {
+        let e = min(edge, 0.45)
+        return LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black.opacity(0.5), location: e * 0.55),
+                                      .init(color: .black, location: e), .init(color: .black, location: 1 - e),
+                                      .init(color: .black.opacity(0.5), location: 1 - e * 0.55), .init(color: .clear, location: 1)],
+                              startPoint: start, endPoint: end)
     }
 }
 

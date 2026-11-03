@@ -369,12 +369,15 @@ struct LeftoverTests {
         #expect(asking.planned.map(\.name) == ["LinearMouse", "Qalta"] && asking.planned[0].bytes == 15_800_000)
         #expect(asking.planned[1].detail == "Last used 2d ago")
         #expect(asking.review.map(\.name) == ["LinearMouse.app", "com.lujjjh.plist", "Qalta.app"])
-        #expect(asking.review[1].section == "LinearMouse" && asking.review[1].detail == "System · /Library/LaunchDaemons")
+        #expect(asking.review[1].section == "LinearMouse")
 
         let confirmed = listed + ["➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel:", "✓ [1/2] LinearMouse"]
         let running = RunProgress.parse(lines: confirmed, live: "⠼ [2/2] Removing Qalta (74.8MB)...")
         #expect(running.review.isEmpty && running.steps.map(\.name) == ["LinearMouse"])
         #expect(running.now == "Removing Qalta" && running.position?.at == 2)
+        // A finished app keeps its listed size, so the total counts up app by app; the question gives Mole's own total.
+        #expect(running.steps[0].bytes == 15_800_000 && running.freed == 15_800_000 && running.promptBytes == 90_500_000)
+        #expect(asking.promptBytes == 90_500_000 && asking.review[1].detail == "Needs your password · /Library/LaunchDaemons")
 
         // One app prints no "✓ [1/1]"; the closing line names it.
         let single = RunProgress.parse(lines: ["◎ Matched 1 app(s):", "1. CounterFlame  2.66GB  |  Last: 2d ago",
@@ -387,11 +390,28 @@ struct LeftoverTests {
                                                  "➤ Network Cache Refresh", "✓ DNS cache refreshed"], live: "")
         #expect(optimize.planned.isEmpty && optimize.steps.map(\.kind) == [.note, .done])
 
-        #expect(QuickReply.title(for: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ") == "Remove 2 apps, 90.5MB?")
+        #expect(QuickReply.title(for: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ") == "Remove 2 apps, 90.5 MB?")
         #expect(QuickReply.options(for: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ").map(\.label) == ["Remove", "Cancel"])
         #expect(QuickReply.title(for: "⊙ Detach now? Enter confirm / Space cancel: ") == "Detach now?")
         #expect(QuickReply.title(for: "Proceed? [y/N]: ") == "Proceed?")
         #expect(QuickReply.title(for: "Password:") == "Password:")
+
+        #expect(QuickReply.title(for: "➤ System caches need sudo. Enter continue, Space skip:") == "System caches need sudo.")
+
+        // Review findings: a Homebrew tag, a size Mole cannot give, a note under an app, personal data, a renamed app, a failure.
+        let brew = RunProgress.parse(lines: ["◎ Matched 2 app(s):", "1. Firefox  200MB  |  Last: 1d ago", "2. Steam  --  |  Last: 3d ago",
+                                             "Files to be removed:", "◎ Firefox [Brew] , 210MB", "✓ /Applications/Firefox.app , 210MB",
+                                             "◎ Steam , N/A (Steam-managed)", "◎ Steam launcher only; game files managed by Steam are not included",
+                                             "✓ /Applications/Steam.app , 1MB", "Personal data to remove:", "✓ ~/Library/Containers/org.mozilla , 1MB"], live: "")
+        #expect(brew.planned.map(\.name) == ["Firefox", "Steam"] && brew.planned[0].bytes == 210_000_000)
+        #expect(brew.review.map(\.section) == ["Firefox", "Steam", "Steam", "Personal data"] && brew.review[1].kind == .note)
+        let renamed = RunProgress.parse(lines: ["1. 微信  300MB  |  Last: 1d ago", "➤ Remove 1 app, 300MB  Enter confirm, ESC cancel:",
+                                                "Removed 1 app, freed 300MB: WeChat"], live: "")
+        #expect(renamed.steps.map(\.name) == ["微信"])
+        let failed = RunProgress.parse(lines: ["1. CounterFlame  2.66GB  |  Last: 2d ago", "➤ Remove 1 app, 2.66GB  Enter confirm, ESC cancel:",
+                                               "☻ CounterFlame failed: still running"], live: "")
+        #expect(failed.steps.map(\.name) == ["CounterFlame"] && failed.steps[0].kind == .failed && failed.steps[0].detail == "still running")
+        #expect(RunProgress.parse(lines: ["◎ Skipped 2 project scan roots because scanning did not complete:"], live: "").steps.count == 1)
 
         let preview = RunProgress.parse(lines: ["→ DRY RUN MODE, No app files or settings will be modified"] + listed
                                         + ["➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel:", "Would remove 2 apps, would free 90.5MB: LinearMouse, Qalta"], live: "")

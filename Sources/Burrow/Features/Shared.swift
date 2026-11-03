@@ -73,6 +73,8 @@ final class Scan<Report>: ObservableObject {
         self.parse = parse
         self.usableAfterFailure = usableAfterFailure
         cacheKey = args.joined(separator: " ")
+        // `-scanPreview 1`: every page looks mid-scan, for reviewing the scanning state; Mole never starts.
+        scanning = UserDefaults.standard.bool(forKey: "scanPreview")
         if let saved = ResultCache.load(cacheKey) {
             report = parse(String(decoding: saved.data, as: UTF8.self))
             finishedAt = saved.date
@@ -213,7 +215,7 @@ struct HeroCard<Actions: View>: View {
     @ViewBuilder var actions: Actions
 
     var body: some View {
-        GlowCard(glow: glow, style: .rim, padding: 26) {
+        GlowCard(glow: glow, style: .rim, padding: 26, busy: scanning) {
             VStack(alignment: .leading, spacing: 14) {
                 // One fixed-height title row in every state, so the badge never pushes the value down.
                 HStack {

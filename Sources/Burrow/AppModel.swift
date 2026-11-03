@@ -119,7 +119,7 @@ final class AppModel: ObservableObject {
 
     /// Review snapshots, the demo tour and replayed runs show what is cached; they never start Mole.
     nonisolated static var reviewMode: Bool {
-        ["snapshot", "tour", "replayRun"].contains { UserDefaults.standard.string(forKey: $0) != nil }
+        ["snapshot", "tour", "replayRun", "scanPreview"].contains { UserDefaults.standard.string(forKey: $0) != nil }
     }
 
     /// Last results come from the cache at once. In the background, one at a time so the Mac

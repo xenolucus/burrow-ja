@@ -113,7 +113,8 @@ struct RunSheet: View {
                     }
                 }
             }
-            .frame(height: 112)
+            .frame(minHeight: 112)
+            .fixedSize(horizontal: false, vertical: true)
         default:
             EmptyView()
         }
@@ -129,7 +130,7 @@ struct RunSheet: View {
         switch session.phase {
         case .running: "Working…"
         case .needsPassword: "Waiting for your password"
-        case .needsAnswer: "Mole is asking you something"
+        case .needsAnswer: "Waiting for you"
         case .finished(let code): code == 0 ? "Finished" : code == 130 || code == 143 ? "Stopped" : "Mole stopped with code \(code)"
         }
     }
@@ -193,7 +194,9 @@ struct QuickReply {
             return s
         }
         s = s.trimmingCharacters(in: CharacterSet(charactersIn: " :,"))
-        return s.hasSuffix("?") ? s : s + "?"
+            .replacingOccurrences(of: #"([0-9])(TB|GB|MB|KB)\b"#, with: "$1 $2", options: .regularExpression)
+        // "System caches need sudo." stays a statement.
+        return s.hasSuffix("?") || s.hasSuffix(".") ? s : s + "?"
     }
 }
 
@@ -206,16 +209,18 @@ private struct RunActivity: View {
     let phase: MoleSession.Phase
 
     private var done: [RunProgress.Step] { progress.steps.filter { $0.kind == .done } }
-    /// The sizes Mole listed for what it is about to do, else the total the user confirmed.
+    /// Mole's own total from its question, else the sizes it listed, else the total the user confirmed.
     private var planTotal: Int64? {
         let listed = progress.planned.compactMap(\.bytes).reduce(0, +)
-        return listed > 0 ? listed : plan
+        return progress.promptBytes ?? (listed > 0 ? listed : plan)
     }
     private var showsBytes: Bool { planTotal != nil || progress.freed > 0 }
     /// Until something is freed the figure is what the run is about to free, not a zero.
     private var headline: (caption: String, value: Int64) {
         if progress.dryRun { return ("Would free", progress.freed > 0 ? progress.freed : planTotal ?? 0) }
-        if progress.freed == 0, !finished, let planTotal { return ("To free", planTotal) }
+        if idle { return ("Nothing removed", 0) }
+        // Only for a list of apps: Clean frees from its first step, so its total would drop at once.
+        if progress.freed == 0, !finished, !progress.planned.isEmpty, let planTotal { return ("To free", planTotal) }
         return (finished ? "Freed" : "Freed so far", progress.freed)
     }
     private var finished: Bool { if case .finished = phase { return true }; return false }
@@ -231,7 +236,7 @@ private struct RunActivity: View {
     private var activity: String {
         switch phase {
         case .running:
-            progress.now ?? progress.steps.last?.section
+            progress.now ?? progress.steps.last?.section.map { "Working on \($0.lowercased())" }
                 ?? (progress.steps.isEmpty ? "Starting Mole" : "Working")
         case .needsPassword: "Waiting for your password"
         case .needsAnswer: progress.review.isEmpty ? "Waiting for your answer" : "Check what Mole will remove, then confirm"
@@ -240,6 +245,17 @@ private struct RunActivity: View {
             idle ? "Nothing was changed"
                 : showsBytes ? "Freed \(progress.freed.bytesText) · \(count(done.count))" : "\(count(done.count)) done"
         case .finished(let code): code == 130 || code == 143 ? "Stopped" : "Mole stopped early"
+        }
+    }
+
+    /// The mark beside the status line when nothing is moving.
+    private var statusSymbol: String? {
+        switch phase {
+        case .running: nil
+        case .needsPassword: "lock.fill"
+        case .needsAnswer: "questionmark"
+        case .finished(let code) where code == 0: progress.dryRun ? "eye" : idle ? "minus" : "checkmark"
+        case .finished: "exclamationmark"
         }
     }
 
@@ -271,6 +287,7 @@ private struct RunActivity: View {
                         .scaleEffect(finished && !Motion.reduced ? 1.04 : 1, anchor: .bottomLeading)
                         .animation(Motion.spring, value: finished)
                 }
+                .animation(Motion.reduced ? nil : Motion.spring, value: headline.caption)
                 Spacer()
                 if let pos = progress.position, pos.of > 1, !finished {
                     VStack(alignment: .trailing, spacing: 12) {
@@ -284,7 +301,11 @@ private struct RunActivity: View {
             }
             HStack(spacing: 12) {
                 Group {
-                    if working { PulseDot(color: glow.color) } else { Color.clear }
+                    if working {
+                        PulseDot(color: glow.color)
+                    } else if let symbol = statusSymbol {
+                        Image(systemName: symbol).font(.system(size: 12, weight: .bold)).foregroundStyle(glow.color)
+                    }
                 }
                 .frame(width: 18, height: 18)
                 Text(activity)
@@ -298,23 +319,25 @@ private struct RunActivity: View {
             ScrollViewReader { proxy in
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
-                        Color.clear.frame(height: 4)
+                        Color.clear.frame(height: 4).id("top")
                         // Before the go-ahead (and in a preview): every file Mole would remove, by app.
                         ForEach(progress.review) { file in
                             if let app = file.section, file.id == 0 || progress.review[file.id - 1].section != app {
                                 SectionTitle(app, bytes: progress.planned.first { $0.name == app }?.bytes, first: file.id == 0)
                             }
-                            StepRow(step: file, upcoming: true).id("review-\(file.id)")
+                            StepRow(step: file, upcoming: true, review: true).id("review-\(file.id)").transition(.blurFade)
                         }
                         ForEach(progress.review.isEmpty ? progress.steps : []) { step in
                             if let section = step.section, step.id == 0 || progress.steps[step.id - 1].section != section {
                                 SectionTitle(section, first: step.id == 0)
                             }
-                            StepRow(step: step).id(step.id).transition(.blurFade)
+                            StepRow(step: step, tint: glow.color).id(step.id).transition(.blurFade)
                         }
                         ForEach(progress.review.isEmpty ? upcoming : []) { item in
-                            StepRow(step: item, upcoming: true,
-                                    current: working && progress.now?.contains(item.name) == true)
+                            // After a run, what is still listed was left alone.
+                            StepRow(step: finished ? .init(id: item.id, kind: item.kind, section: nil, name: item.name, detail: "Kept", bytes: item.bytes) : item,
+                                    upcoming: true, current: working && (progress.now == item.name || progress.now?.hasSuffix(" " + item.name) == true),
+                                    tint: glow.color)
                                 .id("planned-\(item.id)")
                         }
                         // Room under the last row, so following it keeps it clear of the fade.
@@ -328,6 +351,10 @@ private struct RunActivity: View {
                 .mask(LinearGradient(stops: [.init(color: .clear, location: 0), .init(color: .black, location: 0.04),
                                              .init(color: .black, location: 0.9), .init(color: .clear, location: 1)],
                                      startPoint: .top, endPoint: .bottom))
+                .onChange(of: progress.review.isEmpty) {
+                    // From the files to confirm to the apps being removed: start at the top again.
+                    withAnimation(Motion.spring) { proxy.scrollTo("top", anchor: .top) }
+                }
                 .onChange(of: progress.steps.count) {
                     // Follow the newest finished step; with a planned list, keep the current item in view.
                     guard progress.review.isEmpty, let last = progress.steps.last else { return }
@@ -359,6 +386,8 @@ private struct SectionTitle: View {
         .font(.system(size: 11, weight: .semibold))
         .foregroundStyle(Theme.tertiaryText)
         .padding(.top, first ? 0 : 6)
+        .accessibilityElement(children: .combine)
+        .accessibilityAddTraits(.isHeader)
     }
 }
 
@@ -387,13 +416,19 @@ private struct StepRow: View {
     var upcoming = false
     /// The item Mole is working on now.
     var current = false
+    /// A file Mole lists for its confirmation: information, not something to tick.
+    var review = false
+    var tint: Color = Theme.accent
     @ViewState private var landed = false
 
     var body: some View {
         HStack(spacing: 12) {
             Group {
                 if current {
-                    PulseDot()
+                    PulseDot(color: tint)
+                } else if review {
+                    Image(systemName: step.kind == .note ? "lock" : "doc")
+                        .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.secondaryText)
                 } else {
                     switch step.kind {
                     case .done: CheckDot(on: landed && !upcoming)
@@ -406,21 +441,22 @@ private struct StepRow: View {
             .frame(width: 18)
             VStack(alignment: .leading, spacing: 2) {
                 Text(step.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    .foregroundStyle(upcoming && !current ? Theme.tertiaryText : .white)
+                    .foregroundStyle(review ? Theme.secondaryText : upcoming && !current ? Theme.tertiaryText : .white)
                     .shimmer(current)
                 if !detail.isEmpty { Text(detail).caption().lineLimit(1) }
             }
             Spacer(minLength: 8)
             if let bytes = step.bytes {
                 Text(bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                    .opacity(upcoming ? 0.4 : 1)
+                    .opacity(review ? 0.75 : upcoming ? 0.4 : 1)
             }
         }
         .animation(Motion.quick, value: current)
         // The check pops in once the row is on screen.
         .onAppear { landed = true }
         .accessibilityElement(children: .combine)
-        .accessibilityValue(upcoming ? (current ? "In progress" : "Waiting") : "")
+        .accessibilityValue(review ? "Will be removed" : upcoming ? (current ? "In progress" : "Waiting")
+            : step.kind == .done ? "Done" : step.kind == .failed ? "Failed" : "")
     }
 
     /// The detail without the size shown on the right ("12 items, 1.2GB" → "12 items").

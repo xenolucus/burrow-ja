@@ -340,6 +340,8 @@ struct RunProgress: Equatable {
     var review: [Step] = []
     /// A dry run: nothing is removed, the totals are what a real run would free.
     var dryRun = false
+    /// The total in Mole's question ("Remove 2 apps, 90.5MB  Enter confirm").
+    var promptBytes: Int64?
     /// The spinner's text: "Slimming Google Chrome".
     var now: String?
     /// "[2/5]" in Mole's output: which item of how many, and whether that item is finished.
@@ -355,7 +357,7 @@ struct RunProgress: Equatable {
     static func == (a: Self, b: Self) -> Bool {
         a.steps == b.steps && a.planned == b.planned && a.review == b.review && a.dryRun == b.dryRun && a.now == b.now
             && a.position?.at == b.position?.at && a.position?.of == b.position?.of && a.positionDone == b.positionDone
-            && a.summaryBytes == b.summaryBytes
+            && a.summaryBytes == b.summaryBytes && a.promptBytes == b.promptBytes
     }
 
     private static let counter = try! NSRegularExpression(pattern: "^\\[([0-9]+)/([0-9]+)\\]\\s*")
@@ -364,7 +366,7 @@ struct RunProgress: Equatable {
         pattern: "^(?:(?:Slimmed|Removed|Uninstalled|Would remove) [^:]*?, (?:freed|would free)|Tracked cleanup:|Estimated space freed:|Space freed:)\\s*([0-9.]+\\s?(?:TB|GB|MB|KB|B))",
         options: .caseInsensitive)
     /// The closing line of a run over apps, with or without a size: every listed app it did not report failed is done.
-    private static let closing = try! NSRegularExpression(pattern: "^(?:Slimmed|Removed|Uninstalled|Would remove) [0-9]+ apps?\\b")
+    private static let closing = try! NSRegularExpression(pattern: "^(?:Slimmed|Removed|Uninstalled|Would remove) ([0-9]+) apps?\\b")
     /// Uninstall's match list: "1. Slack  212MB  |  Last: 2d ago" (the size is "--" while unknown).
     private static let matched = try! NSRegularExpression(pattern: "^[0-9]+\\. (.+?)\\s{2,}(\\S+)\\s{2,}\\|\\s+Last: (.+)$")
 
@@ -374,21 +376,26 @@ struct RunProgress: Equatable {
         var reviewing = false
         var group: String?
         var named: Set<String> = []
+        var closedCount: Int?
         for line in lines {
             guard let icon = line.first else { continue }
             let ns = NSRange(line.startIndex..., in: line)
             if let m = summary.firstMatch(in: line, range: ns), let r = Range(m.range(at: 1), in: line) {
                 p.summaryBytes = ByteSize.first(in: String(line[r]))
             }
-            if closing.firstMatch(in: line, range: ns) != nil, let colon = line.range(of: ": ") {
+            if let m = closing.firstMatch(in: line, range: ns) {
                 // "Removed 1 app, freed 2.7GB: CounterFlame": the apps it names are done.
-                named.formUnion(line[colon.upperBound...].components(separatedBy: ", ").map { $0.trimmingCharacters(in: .whitespaces) })
+                closedCount = Range(m.range(at: 1), in: line).flatMap { Int(line[$0]) }
+                if let colon = line.range(of: ": ") {
+                    named.formUnion(line[colon.upperBound...].components(separatedBy: ", ").map { $0.trimmingCharacters(in: .whitespaces) })
+                }
                 reviewing = false
             }
             if line.contains("DRY RUN") || line.hasPrefix("Would remove") { p.dryRun = true }
             // Mole lists what it will do (uninstall prints ✓ rows) before it asks; that was a preview.
             if line.range(of: "enter confirm", options: .caseInsensitive) != nil
                 || line.range(of: "esc cancel", options: .caseInsensitive) != nil {
+                p.promptBytes = ByteSize.first(in: line)
                 p.steps.removeAll()
                 p.position = nil
                 // A dry run's list is its result; a real run has started on it.
@@ -396,7 +403,9 @@ struct RunProgress: Equatable {
                 reviewing = false
                 continue
             }
-            if line == "Files to be removed:" || line == "Personal data to remove:" { reviewing = true; continue }
+            // Mole redraws the list when its personal-data choice changes: the new list replaces the old.
+            if line == "Files to be removed:" { reviewing = true; p.review.removeAll(); continue }
+            if line == "Personal data to remove:" { reviewing = true; group = "Personal data"; continue }
             if line == "Personal data kept:" { reviewing = false; continue }
             if p.steps.isEmpty, let m = matched.firstMatch(in: line, range: ns),
                let n = Range(m.range(at: 1), in: line), let s = Range(m.range(at: 2), in: line), let l = Range(m.range(at: 3), in: line) {
@@ -408,13 +417,21 @@ struct RunProgress: Equatable {
                 // "◎ Slack , 212MB" opens an app's group; "✓ ~/Library/Caches/com.slack , 1MB" is one of its files,
                 // "◎ System: /Library/…" one that needs the admin password.
                 let (text, size) = nameAndSize(body)
-                if icon == "◎", !text.contains(":") {
-                    p.plan(text, bytes: ByteSize.first(in: size), detail: nil)
-                    group = text
+                if icon == "◎", let header = body.range(of: " , ", options: .backwards), !body.contains(":") {
+                    // "◎ Firefox [Brew] , 210MB", "◎ Steam , N/A (Steam-managed)": the app is named as in the match list.
+                    var app = String(body[..<header.lowerBound]).trimmingCharacters(in: .whitespaces)
+                    if app.hasSuffix(" [Brew]") { app.removeLast(7) }
+                    p.plan(app, bytes: ByteSize.first(in: String(body[header.upperBound...])), detail: nil)
+                    group = app
+                } else if icon == "◎", !text.hasPrefix("System:"), !text.hasPrefix("Review only:") {
+                    // A note under the app ("Steam launcher only; game files … are not included").
+                    p.review.append(.init(id: p.review.count, kind: .note, section: group, name: text, detail: "", bytes: nil))
                 } else if icon == "✓" || icon == "◎" {
                     let colon = text.range(of: ": ")
                     let path = (colon.map { String(text[$0.upperBound...]) } ?? text) as NSString
+                    // Mole's labels, in words a user can act on.
                     let label = colon.map { String(text[..<$0.lowerBound]) }
+                        .map { ["System": "Needs your password", "Review only": "Kept, check it yourself"][$0] ?? $0 }
                     p.review.append(.init(id: p.review.count, kind: icon == "✓" ? .done : .note, section: group, name: path.lastPathComponent,
                                           detail: [label, path.deletingLastPathComponent].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
                                           bytes: ByteSize.first(in: size)))
@@ -432,7 +449,7 @@ struct RunProgress: Equatable {
             // ◎ with a size, before any work, lists what Mole is about to do; otherwise it is a warning.
             case "◎":
                 // A heading such as "Matched 2 app(s):", not a step.
-                if body.hasSuffix(":") { continue }
+                if body.hasPrefix("Matched ") || body.hasPrefix("Selected ") { continue }
                 // The list above a confirmation: no section, no "[n/m]", nothing done yet.
                 // Not a diagnosis such as "Memory pressure: swap 15GB of 16GB used, 36% free".
                 let (name, size) = nameAndSize(body)
@@ -448,14 +465,22 @@ struct RunProgress: Equatable {
             let name: String, detail: String
             if parts.count > 1 {
                 (name, detail) = (parts[0], parts.dropFirst().joined(separator: " · "))
+            } else if kind == .failed, let failed = body.range(of: " failed: ") {
+                // "☻ CounterFlame failed: still running"
+                (name, detail) = (String(body[..<failed.lowerBound]), String(body[failed.upperBound...]))
             } else if let comma = body.range(of: ", ") {
                 (name, detail) = (String(body[..<comma.lowerBound]), String(body[comma.upperBound...]))
             } else {
                 (name, detail) = (body, "")
             }
-            p.steps.append(.init(id: p.steps.count, kind: kind, section: section, name: name.trimmingCharacters(in: .whitespaces),
-                                 detail: detail, bytes: ByteSize.first(in: detail)))
+            let trimmed = name.trimmingCharacters(in: .whitespaces)
+            // "✓ [1/2] Qalta" carries no size: the app's row keeps the one Mole listed for it.
+            let listed = kind == .done ? p.planned.first { $0.name == trimmed } : nil
+            p.steps.append(.init(id: p.steps.count, kind: kind, section: section, name: trimmed,
+                                 detail: detail.isEmpty ? listed?.detail ?? "" : detail, bytes: ByteSize.first(in: detail) ?? listed?.bytes))
         }
+        // The question still open on screen carries Mole's own total.
+        if live.range(of: "enter confirm", options: .caseInsensitive) != nil { p.promptBytes = ByteSize.first(in: live) ?? p.promptBytes }
         // The spinner line: a braille frame, then the message.
         if let first = live.unicodeScalars.first, (0x2800...0x28FF).contains(first.value) {
             var text = String(live.unicodeScalars.dropFirst().map(Character.init)).trimmingCharacters(in: .whitespaces)
@@ -467,8 +492,10 @@ struct RunProgress: Equatable {
             if !text.isEmpty { p.now = text }
         }
         // A single app gets no "✓ [1/1]" line; Mole's closing line is the only word that it is done.
-        for item in p.planned where !p.dryRun && named.contains(item.name) && !p.steps.contains(where: { $0.name == item.name }) {
-            p.steps.append(.init(id: p.steps.count, kind: .done, section: nil, name: item.name, detail: "", bytes: item.bytes))
+        // Mole names apps by bundle there ("WeChat" for "微信"): when it removed as many as it listed, all of them are done.
+        let all = closedCount == p.planned.count
+        for item in p.planned where !p.dryRun && (all || named.contains(item.name)) && !p.steps.contains(where: { $0.name == item.name }) {
+            p.steps.append(.init(id: p.steps.count, kind: .done, section: nil, name: item.name, detail: item.detail, bytes: item.bytes))
         }
         return p
     }
