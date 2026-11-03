@@ -13,7 +13,7 @@ clean caches, uninstall apps with their leftovers, map your disk and watch your 
 [![macOS 26+](https://img.shields.io/badge/macOS-26%2B-111?logo=apple)](#install)
 [![Stars](https://img.shields.io/github/stars/khan-umirzakoff/Mole-GUI?style=flat&color=ff6a2b)](../../stargazers)
 
-**[⬇ Download Burrow.dmg](../../releases/latest/download/Burrow.dmg)** · [Full 41 s tour](../../releases/download/v0.3.0/demo.mp4) · [What's new](../../releases/latest)
+**[⬇ Download Burrow.dmg](../../releases/latest/download/Burrow.dmg)** · [Full 49 s tour](../../releases/download/v0.4.1/demo.mp4) · [What's new](../../releases/latest)
 
 <img src="docs/demo.gif" width="880" alt="Burrow in 17 seconds: live health, clean, leftovers of deleted apps, maintenance, disk map, slim apps" />
 
