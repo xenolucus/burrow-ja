@@ -336,6 +336,10 @@ struct RunProgress: Equatable {
     var steps: [Step] = []
     /// What Mole listed before it started ("◎ Google Chrome, 576MB" above its confirmation).
     var planned: [Step] = []
+    /// The files Mole shows for its confirmation ("Files to be removed:"), grouped by app in `section`.
+    var review: [Step] = []
+    /// A dry run: nothing is removed, the totals are what a real run would free.
+    var dryRun = false
     /// The spinner's text: "Slimming Google Chrome".
     var now: String?
     /// "[2/5]" in Mole's output: which item of how many, and whether that item is finished.
@@ -349,32 +353,74 @@ struct RunProgress: Equatable {
     }
 
     static func == (a: Self, b: Self) -> Bool {
-        a.steps == b.steps && a.planned == b.planned && a.now == b.now && a.position?.at == b.position?.at
-            && a.position?.of == b.position?.of && a.positionDone == b.positionDone && a.summaryBytes == b.summaryBytes
+        a.steps == b.steps && a.planned == b.planned && a.review == b.review && a.dryRun == b.dryRun && a.now == b.now
+            && a.position?.at == b.position?.at && a.position?.of == b.position?.of && a.positionDone == b.positionDone
+            && a.summaryBytes == b.summaryBytes
     }
 
     private static let counter = try! NSRegularExpression(pattern: "^\\[([0-9]+)/([0-9]+)\\]\\s*")
     /// Mole's closing totals: slim and uninstall ("Slimmed 2 apps, freed 1.2GB"), clean, purge.
     private static let summary = try! NSRegularExpression(
-        pattern: "^(?:(?:Slimmed|Removed|Uninstalled) [^:]*?, freed|Tracked cleanup:|Estimated space freed:|Space freed:)\\s*([0-9.]+\\s?(?:TB|GB|MB|KB|B))",
+        pattern: "^(?:(?:Slimmed|Removed|Uninstalled|Would remove) [^:]*?, (?:freed|would free)|Tracked cleanup:|Estimated space freed:|Space freed:)\\s*([0-9.]+\\s?(?:TB|GB|MB|KB|B))",
         options: .caseInsensitive)
+    /// The closing line of a run over apps, with or without a size: every listed app it did not report failed is done.
+    private static let closing = try! NSRegularExpression(pattern: "^(?:Slimmed|Removed|Uninstalled|Would remove) [0-9]+ apps?\\b")
+    /// Uninstall's match list: "1. Slack  212MB  |  Last: 2d ago" (the size is "--" while unknown).
+    private static let matched = try! NSRegularExpression(pattern: "^[0-9]+\\. (.+?)\\s{2,}(\\S+)\\s{2,}\\|\\s+Last: (.+)$")
 
     static func parse(lines: [String], live: String) -> RunProgress {
         var p = RunProgress()
         var section: String?
+        var reviewing = false
+        var group: String?
+        var named: Set<String> = []
         for line in lines {
             guard let icon = line.first else { continue }
             let ns = NSRange(line.startIndex..., in: line)
             if let m = summary.firstMatch(in: line, range: ns), let r = Range(m.range(at: 1), in: line) {
                 p.summaryBytes = ByteSize.first(in: String(line[r]))
             }
+            if closing.firstMatch(in: line, range: ns) != nil, let colon = line.range(of: ": ") {
+                // "Removed 1 app, freed 2.7GB: CounterFlame": the apps it names are done.
+                named.formUnion(line[colon.upperBound...].components(separatedBy: ", ").map { $0.trimmingCharacters(in: .whitespaces) })
+                reviewing = false
+            }
+            if line.contains("DRY RUN") || line.hasPrefix("Would remove") { p.dryRun = true }
             // Mole lists what it will do (uninstall prints ✓ rows) before it asks; that was a preview.
             if line.range(of: "enter confirm", options: .caseInsensitive) != nil
                 || line.range(of: "esc cancel", options: .caseInsensitive) != nil {
                 p.steps.removeAll()
                 p.position = nil
+                // A dry run's list is its result; a real run has started on it.
+                if !p.dryRun { p.review.removeAll() }
+                reviewing = false
+                continue
+            }
+            if line == "Files to be removed:" || line == "Personal data to remove:" { reviewing = true; continue }
+            if line == "Personal data kept:" { reviewing = false; continue }
+            if p.steps.isEmpty, let m = matched.firstMatch(in: line, range: ns),
+               let n = Range(m.range(at: 1), in: line), let s = Range(m.range(at: 2), in: line), let l = Range(m.range(at: 3), in: line) {
+                p.plan(String(line[n]), bytes: ByteSize.first(in: String(line[s])), detail: "Last used \(line[l])")
+                continue
             }
             var body = String(line.dropFirst()).trimmingCharacters(in: .whitespaces)
+            if reviewing {
+                // "◎ Slack , 212MB" opens an app's group; "✓ ~/Library/Caches/com.slack , 1MB" is one of its files,
+                // "◎ System: /Library/…" one that needs the admin password.
+                let (text, size) = nameAndSize(body)
+                if icon == "◎", !text.contains(":") {
+                    p.plan(text, bytes: ByteSize.first(in: size), detail: nil)
+                    group = text
+                } else if icon == "✓" || icon == "◎" {
+                    let colon = text.range(of: ": ")
+                    let path = (colon.map { String(text[$0.upperBound...]) } ?? text) as NSString
+                    let label = colon.map { String(text[..<$0.lowerBound]) }
+                    p.review.append(.init(id: p.review.count, kind: icon == "✓" ? .done : .note, section: group, name: path.lastPathComponent,
+                                          detail: [label, path.deletingLastPathComponent].compactMap { $0 }.filter { !$0.isEmpty }.joined(separator: " · "),
+                                          bytes: ByteSize.first(in: size)))
+                }
+                continue
+            }
             let kind: Step.Kind
             switch icon {
             case "➤":
@@ -385,12 +431,13 @@ struct RunProgress: Equatable {
             case "☻", "✗": kind = .failed
             // ◎ with a size, before any work, lists what Mole is about to do; otherwise it is a warning.
             case "◎":
+                // A heading such as "Matched 2 app(s):", not a step.
+                if body.hasSuffix(":") { continue }
                 // The list above a confirmation: no section, no "[n/m]", nothing done yet.
-                if ByteSize.first(in: body) != nil, section == nil, p.steps.isEmpty, !body.hasPrefix("["),
-                   let comma = body.range(of: ",", options: .backwards) {
-                    p.planned.append(.init(id: p.planned.count, kind: .note, section: nil,
-                                           name: body[..<comma.lowerBound].trimmingCharacters(in: .whitespaces),
-                                           detail: "", bytes: ByteSize.first(in: String(body[comma.upperBound...]))))
+                // Not a diagnosis such as "Memory pressure: swap 15GB of 16GB used, 36% free".
+                let (name, size) = nameAndSize(body)
+                if let bytes = ByteSize.first(in: size), section == nil, p.steps.isEmpty, !body.hasPrefix("["), !name.contains(":") {
+                    p.plan(name, bytes: bytes, detail: nil)
                     continue
                 }
                 kind = .note
@@ -414,9 +461,32 @@ struct RunProgress: Equatable {
             var text = String(live.unicodeScalars.dropFirst().map(Character.init)).trimmingCharacters(in: .whitespaces)
             if let (at, of) = strip(&text) { (p.position, p.positionDone) = ((at, of), false) }
             while text.hasSuffix(".") || text.hasSuffix("…") { text.removeLast() }
+            // "Removing Qalta (74.8MB)": the row for the app already shows its size.
+            if text.hasSuffix(")"), let open = text.range(of: " (", options: .backwards),
+               ByteSize.first(in: String(text[open.upperBound...])) != nil { text.removeSubrange(open.lowerBound...) }
             if !text.isEmpty { p.now = text }
         }
+        // A single app gets no "✓ [1/1]" line; Mole's closing line is the only word that it is done.
+        for item in p.planned where !p.dryRun && named.contains(item.name) && !p.steps.contains(where: { $0.name == item.name }) {
+            p.steps.append(.init(id: p.steps.count, kind: .done, section: nil, name: item.name, detail: "", bytes: item.bytes))
+        }
         return p
+    }
+
+    /// Adds an item to the list Mole is about to work on, or fills in what a later line knows about it.
+    private mutating func plan(_ name: String, bytes: Int64?, detail: String?) {
+        if let i = planned.firstIndex(where: { $0.name == name }) {
+            let old = planned[i]
+            planned[i] = .init(id: old.id, kind: .note, section: nil, name: name, detail: detail ?? old.detail, bytes: bytes ?? old.bytes)
+        } else {
+            planned.append(.init(id: planned.count, kind: .note, section: nil, name: name, detail: detail ?? "", bytes: bytes))
+        }
+    }
+
+    /// "Slack , 212MB" → ("Slack", "212MB"); the size follows the last comma.
+    private static func nameAndSize(_ s: String) -> (String, String) {
+        guard let comma = s.range(of: ",", options: .backwards), ByteSize.first(in: String(s[comma.upperBound...])) != nil else { return (s, "") }
+        return (s[..<comma.lowerBound].trimmingCharacters(in: .whitespaces), String(s[comma.upperBound...]))
     }
 
     /// Takes a leading "[2/5] " off and returns its numbers.

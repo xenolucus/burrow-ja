@@ -106,6 +106,8 @@ final class MoleSession: ObservableObject, Identifiable {
         Task { [weak self] in
             for line in transcript.split(separator: "\n", omittingEmptySubsequences: false) {
                 try? await Task.sleep(for: .seconds(pace))
+                // "@hold" stops the replay where it is, so a snapshot can show a run mid-way.
+                if line == "@hold" { return }
                 // A line ending in a literal \r stays open, like a spinner frame.
                 let raw = line.replacingOccurrences(of: "\\r", with: "\r")
                 self?.ingest(Data((raw.hasSuffix("\r") ? raw : raw + "\n").utf8))

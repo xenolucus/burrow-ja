@@ -163,7 +163,7 @@ struct UninstallPage: View {
             Toggle("Skip Trash", isOn: $permanent).toggleStyle(.switch).controlSize(.small)
                 .help("Delete for good instead of moving to the Trash")
             Button("Preview") {
-                model.run("Preview uninstall", ["uninstall", "--dry-run"] + flags + names)
+                model.run("Preview uninstall", ["uninstall", "--dry-run"] + flags + names, plan: chosenBytes)
             }
             .buttonStyle(.pillSecondary)
             .help("See every file Mole would remove, without removing anything")
@@ -179,7 +179,7 @@ struct UninstallPage: View {
                         message: permanent ? "Apps and their leftovers are deleted for good. Mole shows the full list and asks once more." :
                             "Apps and their leftovers go to the Trash, so you can still restore them. Mole shows the full list and asks once more.",
                         button: "Uninstall") {
-            model.run("Uninstalling", ["uninstall"] + flags + names) {
+            model.run("Uninstalling", ["uninstall"] + flags + names, plan: chosenBytes) {
                 selected.removeAll()
                 Task {
                     await catalog.load()

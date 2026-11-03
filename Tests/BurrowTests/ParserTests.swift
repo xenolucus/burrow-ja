@@ -112,7 +112,7 @@ struct BehaviourTests {
         #expect(sudo.map(\.label) == ["Continue", "Skip"])
         #expect(sudo[0].keys == "\r" && sudo[1].keys == " ")
         let purge = QuickReply.options(for: "→ Remove 3 artifacts, 1.2GB  Enter confirm, ESC cancel:")
-        #expect(purge.map(\.label) == ["Confirm", "Cancel"])
+        #expect(purge.map(\.label) == ["Remove", "Cancel"])
     }
 
     /// Runs the bundled Mole; only harmless invocations (version, a rejected flag).
@@ -356,6 +356,46 @@ struct LeftoverTests {
         #expect(clean.steps.map(\.section) == ["Notification Center", "User essentials", "User essentials"])
         #expect(clean.steps[1].detail == "12 items, 1.20GB" && clean.steps[2].bytes == nil)
         #expect(clean.freed == 1_500_000_000)
+    }
+
+    @Test func uninstallProgress() {
+        // Recorded from mo uninstall: the match list, the files for the confirmation, then the run.
+        let listed = ["◎ Matched 2 app(s):", "1. LinearMouse  --  |  Last: 1m ago", "2. Qalta  74.8MB  |  Last: 2d ago",
+                      "Files to be removed:", "◎ LinearMouse , 15.8MB", "✓ /Applications/LinearMouse.app , 15.8MB",
+                      "◎ System: /Library/LaunchDaemons/com.lujjjh.plist", "◎ Qalta , 74.8MB", "✓ /Applications/Qalta.app , 74.8MB",
+                      "Personal data kept:", "⊙ ~/Library/Containers/com.qalta", "D choose personal data"]
+        let asking = RunProgress.parse(lines: listed, live: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ")
+        #expect(asking.steps.isEmpty && !asking.dryRun)
+        #expect(asking.planned.map(\.name) == ["LinearMouse", "Qalta"] && asking.planned[0].bytes == 15_800_000)
+        #expect(asking.planned[1].detail == "Last used 2d ago")
+        #expect(asking.review.map(\.name) == ["LinearMouse.app", "com.lujjjh.plist", "Qalta.app"])
+        #expect(asking.review[1].section == "LinearMouse" && asking.review[1].detail == "System · /Library/LaunchDaemons")
+
+        let confirmed = listed + ["➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel:", "✓ [1/2] LinearMouse"]
+        let running = RunProgress.parse(lines: confirmed, live: "⠼ [2/2] Removing Qalta (74.8MB)...")
+        #expect(running.review.isEmpty && running.steps.map(\.name) == ["LinearMouse"])
+        #expect(running.now == "Removing Qalta" && running.position?.at == 2)
+
+        // One app prints no "✓ [1/1]"; the closing line names it.
+        let single = RunProgress.parse(lines: ["◎ Matched 1 app(s):", "1. CounterFlame  2.66GB  |  Last: 2d ago",
+                                               "➤ Remove 1 app, 2.66GB  Enter confirm, ESC cancel:",
+                                               "Uninstall complete", "Removed 1 app, freed 2.66GB: CounterFlame"], live: "")
+        #expect(single.steps.map(\.name) == ["CounterFlame"] && single.freed == 2_660_000_000)
+
+        // Optimize's diagnosis comes before any section; a size in it is not a list of work.
+        let optimize = RunProgress.parse(lines: ["◎ Memory pressure: swap 15.21GB of 16.11GB used (94%), 36% free",
+                                                 "➤ Network Cache Refresh", "✓ DNS cache refreshed"], live: "")
+        #expect(optimize.planned.isEmpty && optimize.steps.map(\.kind) == [.note, .done])
+
+        #expect(QuickReply.title(for: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ") == "Remove 2 apps, 90.5MB?")
+        #expect(QuickReply.options(for: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel: ").map(\.label) == ["Remove", "Cancel"])
+        #expect(QuickReply.title(for: "⊙ Detach now? Enter confirm / Space cancel: ") == "Detach now?")
+        #expect(QuickReply.title(for: "Proceed? [y/N]: ") == "Proceed?")
+        #expect(QuickReply.title(for: "Password:") == "Password:")
+
+        let preview = RunProgress.parse(lines: ["→ DRY RUN MODE, No app files or settings will be modified"] + listed
+                                        + ["➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel:", "Would remove 2 apps, would free 90.5MB: LinearMouse, Qalta"], live: "")
+        #expect(preview.dryRun && preview.review.count == 3 && preview.freed == 90_500_000)
     }
 
     @Test func purgeKeepsResultsWhenSomeFoldersCouldNotBeChecked() {

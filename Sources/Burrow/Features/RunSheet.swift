@@ -103,7 +103,7 @@ struct RunSheet: View {
         case .needsAnswer(let question):
             GlowCard(glow: .ember, style: .rim, padding: 18) {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text(question.trimmingCharacters(in: CharacterSet(charactersIn: "➤→◎⊙ "))).cardTitle().lineLimit(3)
+                    Text(QuickReply.title(for: question)).cardTitle().lineLimit(3)
                     HStack(spacing: 10) {
                         ForEach(QuickReply.options(for: question), id: \.label) { option in
                             Button(option.label) { session.reply(option.keys) }
@@ -113,7 +113,7 @@ struct RunSheet: View {
                     }
                 }
             }
-            .frame(height: 130)
+            .frame(height: 112)
         default:
             EmptyView()
         }
@@ -162,7 +162,10 @@ struct QuickReply {
         let p = prompt.lowercased()
         var options: [QuickReply] = []
         if p.contains("enter") {
-            let verb = p.contains("confirm") ? "Confirm" : p.contains("continue") ? "Continue" : "Enter"
+            // "Remove 2 apps, 90.5MB  Enter confirm": the button says what it does.
+            let first = title(for: prompt).components(separatedBy: " ").first ?? ""
+            let verb = ["Remove", "Uninstall", "Slim", "Clean", "Delete", "Purge", "Optimize"].contains(first) ? first
+                : p.contains("confirm") ? "Confirm" : p.contains("continue") ? "Continue" : "Enter"
             options.append(.init(label: verb, keys: "\r", primary: true))
         }
         if p.contains("space") {
@@ -180,6 +183,18 @@ struct QuickReply {
         }
         return options
     }
+
+    /// The question without Mole's key hints: "➤ Remove 2 apps, 90.5MB  Enter confirm, ESC cancel:" → "Remove 2 apps, 90.5MB?"
+    static func title(for prompt: String) -> String {
+        var s = prompt.trimmingCharacters(in: CharacterSet(charactersIn: "➤→◎⊙ "))
+        if let hint = s.range(of: #"\s+(Enter|ESC|Space|Q)\s+(confirm|cancel|continue|skip)|\s*\[?[yY]/[nN]\]?"#, options: .regularExpression) {
+            s = String(s[..<hint.lowerBound])
+        } else {
+            return s
+        }
+        s = s.trimmingCharacters(in: CharacterSet(charactersIn: " :,"))
+        return s.hasSuffix("?") ? s : s + "?"
+    }
 }
 
 /// A real run drawn as progress, not a terminal: how much is freed, what Mole is doing now,
@@ -191,7 +206,18 @@ private struct RunActivity: View {
     let phase: MoleSession.Phase
 
     private var done: [RunProgress.Step] { progress.steps.filter { $0.kind == .done } }
-    private var showsBytes: Bool { plan != nil || progress.freed > 0 }
+    /// The sizes Mole listed for what it is about to do, else the total the user confirmed.
+    private var planTotal: Int64? {
+        let listed = progress.planned.compactMap(\.bytes).reduce(0, +)
+        return listed > 0 ? listed : plan
+    }
+    private var showsBytes: Bool { planTotal != nil || progress.freed > 0 }
+    /// Until something is freed the figure is what the run is about to free, not a zero.
+    private var headline: (caption: String, value: Int64) {
+        if progress.dryRun { return ("Would free", progress.freed > 0 ? progress.freed : planTotal ?? 0) }
+        if progress.freed == 0, !finished, let planTotal { return ("To free", planTotal) }
+        return (finished ? "Freed" : "Freed so far", progress.freed)
+    }
     private var finished: Bool { if case .finished = phase { return true }; return false }
     private var working: Bool { phase == .running }
     /// Mole exited cleanly but did nothing, for example after its own confirmation was declined.
@@ -205,23 +231,28 @@ private struct RunActivity: View {
     private var activity: String {
         switch phase {
         case .running:
-            progress.now ?? progress.steps.last?.section.map { "Cleaning \($0.lowercased())" }
+            progress.now ?? progress.steps.last?.section
                 ?? (progress.steps.isEmpty ? "Starting Mole" : "Working")
         case .needsPassword: "Waiting for your password"
-        case .needsAnswer: "Waiting for your answer"
+        case .needsAnswer: progress.review.isEmpty ? "Waiting for your answer" : "Check what Mole will remove, then confirm"
+        case .finished(let code) where code == 0 && progress.dryRun: "Preview only · nothing was removed"
         case .finished(let code) where code == 0:
             idle ? "Nothing was changed"
-                : showsBytes ? "Freed \(progress.freed.bytesText) · \(steps(done.count))" : "\(steps(done.count)) done"
+                : showsBytes ? "Freed \(progress.freed.bytesText) · \(count(done.count))" : "\(count(done.count)) done"
         case .finished(let code): code == 130 || code == 143 ? "Stopped" : "Mole stopped early"
         }
     }
 
-    private func steps(_ n: Int) -> String { "\(n) step\(n == 1 ? "" : "s")" }
+    /// Apps for a run over apps (slim, uninstall), steps otherwise.
+    private func count(_ n: Int) -> String {
+        "\(n) \(progress.planned.isEmpty ? "step" : "app")\(n == 1 ? "" : "s")"
+    }
 
     /// Freed against the plan; else items of the "[2/5]" counter. Full once Mole is done.
     private var fraction: Double? {
         if phase == .finished(0) { return idle ? 0 : 1 }
-        if let plan, plan > 0 { return min(Double(progress.freed) / Double(plan), 1) }
+        // Uninstall frees nothing until each app is gone, so its "[2/5]" counter says more than the bytes.
+        if let plan = planTotal, plan > 0, progress.freed > 0 || progress.position == nil { return min(Double(progress.freed) / Double(plan), 1) }
         if let pos = progress.position, pos.of > 0 { return Double(pos.at - (progress.positionDone ? 0 : 1)) / Double(pos.of) }
         return nil
     }
@@ -230,9 +261,13 @@ private struct RunActivity: View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .bottom) {
                 VStack(alignment: .leading, spacing: 10) {
-                    Text(showsBytes ? (finished ? "Freed" : "Freed so far") : "Steps done").caption()
-                    CountingValue(value: Double(showsBytes ? progress.freed : Int64(done.count)), bytes: showsBytes)
-                        .animation(Motion.reduced ? nil : .smooth(duration: 0.6), value: progress.freed)
+                    Text(showsBytes ? headline.caption : "Steps done").caption()
+                        .contentTransition(.opacity)
+                    CountingValue(value: Double(showsBytes ? headline.value : Int64(done.count)), bytes: showsBytes)
+                        .animation(Motion.reduced ? nil : .smooth(duration: 0.6), value: headline.value)
+                        // A new caption is a new figure, not the old one counting down.
+                        .id(headline.caption)
+                        .transition(.blurFade)
                         .scaleEffect(finished && !Motion.reduced ? 1.04 : 1, anchor: .bottomLeading)
                         .animation(Motion.spring, value: finished)
                 }
@@ -264,16 +299,22 @@ private struct RunActivity: View {
                 ScrollView {
                     LazyVStack(alignment: .leading, spacing: 10) {
                         Color.clear.frame(height: 4)
-                        ForEach(progress.steps) { step in
+                        // Before the go-ahead (and in a preview): every file Mole would remove, by app.
+                        ForEach(progress.review) { file in
+                            if let app = file.section, file.id == 0 || progress.review[file.id - 1].section != app {
+                                SectionTitle(app, bytes: progress.planned.first { $0.name == app }?.bytes, first: file.id == 0)
+                            }
+                            StepRow(step: file, upcoming: true).id("review-\(file.id)")
+                        }
+                        ForEach(progress.review.isEmpty ? progress.steps : []) { step in
                             if let section = step.section, step.id == 0 || progress.steps[step.id - 1].section != section {
-                                Text(section).font(.system(size: 11, weight: .semibold)).foregroundStyle(Theme.tertiaryText)
-                                    .textCase(.uppercase).padding(.top, step.id == 0 ? 0 : 6)
+                                SectionTitle(section, first: step.id == 0)
                             }
                             StepRow(step: step).id(step.id).transition(.blurFade)
                         }
-                        ForEach(upcoming) { item in
+                        ForEach(progress.review.isEmpty ? upcoming : []) { item in
                             StepRow(step: item, upcoming: true,
-                                    current: working && progress.now?.hasSuffix(item.name) == true)
+                                    current: working && progress.now?.contains(item.name) == true)
                                 .id("planned-\(item.id)")
                         }
                         // Room under the last row, so following it keeps it clear of the fade.
@@ -289,13 +330,35 @@ private struct RunActivity: View {
                                      startPoint: .top, endPoint: .bottom))
                 .onChange(of: progress.steps.count) {
                     // Follow the newest finished step; with a planned list, keep the current item in view.
-                    guard let last = progress.steps.last else { return }
+                    guard progress.review.isEmpty, let last = progress.steps.last else { return }
                     withAnimation(Motion.spring) {
                         if upcoming.isEmpty { proxy.scrollTo("end", anchor: .bottom) } else { proxy.scrollTo(last.id, anchor: .center) }
                     }
                 }
             }
         }
+    }
+}
+
+/// A group heading in the run's list: a Clean section, or an app and its size.
+private struct SectionTitle: View {
+    let text: String
+    var bytes: Int64?
+    let first: Bool
+
+    init(_ text: String, bytes: Int64? = nil, first: Bool) {
+        (self.text, self.bytes, self.first) = (text, bytes, first)
+    }
+
+    var body: some View {
+        HStack {
+            Text(text).textCase(.uppercase)
+            Spacer()
+            if let bytes { Text(bytes.bytesText).monospacedDigit() }
+        }
+        .font(.system(size: 11, weight: .semibold))
+        .foregroundStyle(Theme.tertiaryText)
+        .padding(.top, first ? 0 : 6)
     }
 }
 
