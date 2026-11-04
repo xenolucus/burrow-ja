@@ -31,6 +31,19 @@ final class StatusMonitor: ObservableObject {
         task = nil
     }
 
+    /// The overview and the menu bar card share one stream: it runs while either is on screen.
+    /// A set, so an unpaired appear never keeps it running.
+    private var owners = Set<String>()
+    func acquire(_ owner: String) {
+        owners.insert(owner)
+        start()
+    }
+
+    func release(_ owner: String) {
+        owners.remove(owner)
+        if owners.isEmpty { stop() }
+    }
+
     private func ingest(_ line: String) {
         guard let data = line.data(using: .utf8),
               let s = try? JSONDecoder().decode(SystemStatus.self, from: data) else { return }
@@ -84,8 +97,8 @@ struct OverviewPage: View {
                     .background(RoundedRectangle(cornerRadius: Theme.radius, style: .continuous).fill(.black.opacity(0.7)))
             }
         }
-        .onAppear { monitor.start() }
-        .onDisappear { monitor.stop() }
+        .onAppear { monitor.acquire("overview") }
+        .onDisappear { monitor.release("overview") }
     }
 
     private func diskCard(_ s: SystemStatus?) -> some View {

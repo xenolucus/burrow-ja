@@ -44,6 +44,7 @@ struct SettingsPage: View {
     /// nil while checking.
     @ViewState private var touchID: Bool? = SettingsPage.knownTouchID
     @AppStorage(RemovalWatcher.enabledKey) private var offerLeftovers = true
+    @AppStorage("showInMenuBar") private var showInMenuBar = true
     @ViewState private var openAtLogin = SMAppService.mainApp.status == .enabled
 
     var body: some View {
@@ -118,6 +119,10 @@ struct SettingsPage: View {
                         GridRow {
                             Text("Offer to clean up").font(.system(size: 13))
                             Toggle("Offer to clean up", isOn: $offerLeftovers).labelsHidden()
+                        }
+                        GridRow {
+                            Text("Show in menu bar").font(.system(size: 13))
+                            Toggle("Show in menu bar", isOn: $showInMenuBar).labelsHidden()
                         }
                         GridRow {
                             Text("Start Burrow at login").font(.system(size: 13))

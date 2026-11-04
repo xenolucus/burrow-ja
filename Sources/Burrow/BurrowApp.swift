@@ -5,9 +5,11 @@ import SwiftUI
 struct BurrowApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
     @StateObject private var model = AppModel()
+    @AppStorage("showInMenuBar") private var showInMenuBar = true
 
     var body: some Scene {
-        WindowGroup("Burrow") {
+        // One window: reopening it from the menu bar brings back the same one.
+        Window("Burrow", id: "main") {
             RootView()
                 .environmentObject(model)
                 .onAppear {
@@ -36,7 +38,19 @@ struct BurrowApp: App {
                 }
             }
         }
+
+        MenuBarExtra(isInserted: $showInMenuBar) {
+            TrayView(model: model, monitor: model.status, leftovers: model.leftovers)
+        } label: {
+            Image(nsImage: TrayIcon.image)
+        }
+        .menuBarExtraStyle(.window)
     }
+}
+
+extension NSApplication {
+    /// The main window, not the menu bar card, a run sheet or the leftovers panel.
+    var burrowWindow: NSWindow? { windows.first { $0.identifier?.rawValue.hasPrefix("main") == true } }
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
@@ -46,11 +60,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Sparkle, reading the appcast on the GitHub releases. Only in a bundle that names a feed,
     /// and never in review snapshots or the demo tour.
     private(set) var updater: SPUStandardUpdaterController?
+    private var trayHost: NSWindow?
 
     override init() {
         // Burrow keeps running with its window closed, and the saved "no windows" state would
         // start the next launch with no window at all.
-        UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true])
+        UserDefaults.standard.register(defaults: ["ApplePersistenceIgnoreState": true, "showInMenuBar": true])
         super.init()
     }
 
@@ -80,7 +95,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let event = NSAppleEventManager.shared().currentAppleEvent
         if RemovalWatcher.enabled, event?.eventID == kAEOpenApplication,
            event?.paramDescriptor(forKeyword: keyAEPropData)?.enumCodeValue == keyAELaunchedAsLogInItem {
-            DispatchQueue.main.async { NSApp.windows.filter { !($0 is NSPanel) }.forEach { $0.close() } }
+            DispatchQueue.main.async { NSApp.burrowWindow?.close() }
         }
     }
 
@@ -89,16 +104,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func scheduleSnapshot() {
         let defaults = UserDefaults.standard
         guard let path = defaults.string(forKey: "snapshot") else { return }
+        if defaults.bool(forKey: "snapshotTray") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
+                guard let model = self.model else { return }
+                let host = NSHostingView(rootView: TrayView(model: model, monitor: model.status, leftovers: model.leftovers))
+                host.frame.size = host.fittingSize
+                let window = NSWindow(contentRect: host.frame, styleMask: .borderless, backing: .buffered, defer: false)
+                window.contentView = host
+                window.setFrameOrigin(NSPoint(x: -10000, y: -10000))
+                window.orderFrontRegardless()
+                self.trayHost = window
+            }
+        }
         let delay = defaults.double(forKey: "snapshotDelay") > 0 ? defaults.double(forKey: "snapshotDelay") : 10
         // `-snapshotSize 1080x700` checks a layout at a given window size.
         if let size = defaults.string(forKey: "snapshotSize")?.split(separator: "x").compactMap({ Double($0) }), size.count == 2 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 1) {
-                NSApp.windows.first?.setContentSize(NSSize(width: size[0], height: size[1]))
+                NSApp.burrowWindow?.setContentSize(NSSize(width: size[0], height: size[1]))
             }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            // `-snapshotTray 1` draws the menu bar card instead of the window.
+            if defaults.bool(forKey: "snapshotTray"), let host = self.trayHost?.contentView {
+                host.setFrameSize(host.fittingSize)
+                guard let rep = host.bitmapImageRepForCachingDisplay(in: host.bounds) else { exit(1) }
+                host.cacheDisplay(in: host.bounds, to: rep)
+                try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: path))
+                Mole.terminateAll()
+                exit(0)
+            }
             // An open run sheet is drawn instead of the window behind it.
-            let window = NSApp.windows.first(where: { $0.isVisible || $0.contentView != nil })
+            let window = NSApp.burrowWindow
             if let view = (window?.attachedSheet ?? window)?.contentView,
                let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
                 view.cacheDisplay(in: view.bounds, to: rep)
@@ -124,6 +160,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) { Mole.terminateAll() }
 
-    /// While it offers to clean up after deleted apps, Burrow keeps watching from the Dock.
-    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { !RemovalWatcher.enabled }
+    /// While it sits in the menu bar or offers to clean up after deleted apps, Burrow keeps running.
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        !RemovalWatcher.enabled && !UserDefaults.standard.bool(forKey: "showInMenuBar")
+    }
 }

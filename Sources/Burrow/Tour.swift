@@ -43,7 +43,7 @@ enum Tour {
         """
 
     static func start(_ model: AppModel, into folder: String, waited: Double = 0) {
-        guard let window = NSApp.windows.first(where: \.isVisible), let screen = NSScreen.screens.first else { return }
+        guard let window = NSApp.burrowWindow, let screen = NSScreen.screens.first else { return }
         // Start once the live status and the leftovers are on hand, so no page shows a placeholder.
         let ready = model.status.status != nil && model.leftovers.leftovers != nil
         if !ready, waited < 60 {
