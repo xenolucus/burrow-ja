@@ -71,6 +71,9 @@ enum Page: String, CaseIterable, Identifiable {
 @MainActor
 final class AppModel: ObservableObject {
     /// `-startPage clean` on the command line opens a page directly (handy for screenshots).
+    /// Set by the menu bar card: the Clean page asks to clean once it is on screen. A time, so a
+    /// request the page never saw expires instead of asking hours later.
+    @Published var askCleanAt: Date?
     @Published var page = Page(rawValue: UserDefaults.standard.string(forKey: "startPage") ?? "") ?? .overview
     @Published var session: MoleSession?
     /// Pages with work in progress, marked in the sidebar.

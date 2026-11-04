@@ -189,9 +189,11 @@ struct Pill: InsettableShape {
 struct PillButtonStyle: ButtonStyle {
     enum Kind { case primary, secondary, danger }
     var kind: Kind = .primary
+    /// A smaller pill for rows (the menu bar card).
+    var compact = false
 
     func makeBody(configuration: Configuration) -> some View {
-        PillBody(kind: kind, fill: fill, configuration: configuration)
+        PillBody(kind: kind, fill: fill, compact: compact, configuration: configuration)
     }
 
     private var fill: Color {
@@ -206,15 +208,16 @@ struct PillButtonStyle: ButtonStyle {
 private struct PillBody: View {
     let kind: PillButtonStyle.Kind
     let fill: Color
+    let compact: Bool
     let configuration: ButtonStyleConfiguration
     @Environment(\.isEnabled) private var enabled
     @ViewState private var hover = false
 
     var body: some View {
         configuration.label
-            .font(.system(size: 13, weight: .semibold))
-            .padding(.horizontal, 18)
-            .frame(height: 36)
+            .font(.system(size: compact ? 12 : 13, weight: .semibold))
+            .padding(.horizontal, compact ? 12 : 18)
+            .frame(height: compact ? 24 : 36)
             .foregroundStyle(kind == .primary ? Color.black : Color.white)
             .background {
                 Capsule().fill(fill)

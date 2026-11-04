@@ -28,7 +28,7 @@ struct TrayView: View {
             HStack(spacing: 10) {
                 vital("CPU", s.map { String(format: "%.0f", $0.cpu?.usage ?? 0) }, unit: "%", fill: (s?.cpu?.usage ?? 0) / 100, glow: .violet)
                 vital("Memory", s.map { String(format: "%.0f", $0.memory?.used_percent ?? 0) }, unit: "%",
-                      fill: (s?.memory?.used_percent ?? 0) / 100, glow: .magenta)
+                      fill: (s?.memory?.used_percent ?? 0) / 100, glow: .magenta, pressure: monitor.pressure)
                 if let b = s?.batteries?.first {
                     vital("Battery", String(format: "%.0f", b.percent ?? 0), unit: "%", fill: (b.percent ?? 0) / 100, glow: .ember)
                 } else {
@@ -39,7 +39,8 @@ struct TrayView: View {
             }
 
             VStack(spacing: 2) {
-                row("Caches and logs", value: scanValue(model.clean, \.total), busy: model.clean.scanning, page: .clean)
+                TrayRow(title: "Caches and logs", value: scanValue(model.clean, \.total), busy: model.clean.scanning,
+                        clean: canClean ? { open(.clean); model.askCleanAt = Date() } : nil) { open(.clean) }
                 row("Leftovers of removed apps", value: leftoversValue, busy: leftovers.scanning, page: .uninstall)
                 row("Old installers", value: model.installers.files.map { $0.map(\.bytes).reduce(0, +).bytesText }
                         ?? (model.installers.scanning ? "Looking…" : "Not checked"),
@@ -77,6 +78,7 @@ struct TrayView: View {
 
     /// Brings the window forward (or back, once closed), on `page` when given.
     private func open(_ page: Page?) {
+        model.askCleanAt = nil
         if let page { model.page = page }
         NSApp.activate()
         if let window = NSApp.burrowWindow {
@@ -107,24 +109,39 @@ struct TrayView: View {
         .accessibilityAddTraits(.isButton)
     }
 
-    private func vital(_ title: String, _ value: String?, unit: String, fill: Double, glow: Glow) -> some View {
+    /// `pressure` colours the memory meter: a full RAM is normal on a Mac, pressure is not.
+    private func vital(_ title: String, _ value: String?, unit: String, fill: Double, glow: Glow,
+                       pressure: MemoryPressure? = nil) -> some View {
         Button { open(.overview) } label: {
             GlowCard(glow: glow, style: .core, padding: 12) {
                 VStack(alignment: .leading, spacing: 8) {
-                    Text(title).font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
+                    HStack(spacing: 4) {
+                        Text(title).font(.system(size: 11)).foregroundStyle(Theme.secondaryText).lineLimit(1)
+                        Spacer(minLength: 0)
+                        // Only pressure that matters is shown, in words: a full RAM is normal on a Mac.
+                        if let pressure, pressure != .normal {
+                            Text(pressure.label).font(.system(size: 10, weight: .semibold)).foregroundStyle(pressure.color)
+                        }
+                    }
                     MetricValue(value: value ?? "-", unit: unit, dot: 3, live: true)
-                    DotMeter(value: fill, count: 9)
+                    DotMeter(value: fill, count: 9, color: pressure == nil || pressure == .normal ? .white : pressure!.color)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .buttonStyle(.plain).hoverLift()
         .accessibilityElement(children: .combine)
+        .accessibilityValue(pressure.map { "Memory pressure \($0.label)" } ?? "")
         .accessibilityHint("Opens Overview")
     }
 
     private func row(_ title: String, value: String, busy: Bool, page: Page) -> some View {
         TrayRow(title: title, value: value, busy: busy) { open(page) }
+    }
+
+    /// Cleaning starts from the window's own confirmation and run sheet, never from here.
+    private var canClean: Bool {
+        !model.clean.scanning && (model.clean.report?.total ?? 0) > 0 && model.session == nil
     }
 
     private func scanValue<R>(_ scan: Scan<R>, _ bytes: KeyPath<R, Int64>) -> String {
@@ -142,27 +159,44 @@ private struct TrayRow: View {
     let title: String
     let value: String
     let busy: Bool
+    /// A Clean button on the row, when there is something to clean.
+    var clean: (() -> Void)?
     let action: () -> Void
     @ViewState private var hover = false
 
     var body: some View {
-        Button(action: action) {
-            HStack(spacing: 8) {
-                Text(title).font(.system(size: 13))
-                Spacer()
-                if busy { PulseDot() }
-                Text(value).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Theme.secondaryText)
-                Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.tertiaryText)
+        // The Clean button sits beside the row's own button: a button inside another's label
+        // does not reliably get its click.
+        HStack(spacing: 8) {
+            Button(action: action) {
+                HStack(spacing: 8) {
+                    Text(title).font(.system(size: 13))
+                    Spacer()
+                    if busy { PulseDot() }
+                    Text(value).font(.system(size: 13, weight: .medium)).monospacedDigit().foregroundStyle(Theme.secondaryText)
+                    if clean == nil { chevron }
+                }
+                .frame(maxHeight: .infinity)
+                .contentShape(Rectangle())
             }
-            .padding(.horizontal, 10)
-            .frame(height: 34)
-            .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(hover ? 0.07 : 0)))
-            .contentShape(Rectangle())
+            .buttonStyle(.plain)
+            .onHover { hover = $0 }
+            .accessibilityLabel("\(title), \(value)")
+            if let clean {
+                Button("Clean", action: clean)
+                    .buttonStyle(PillButtonStyle(kind: .secondary, compact: true))
+                    .accessibilityLabel("Clean \(title.lowercased()), \(value)")
+                    .accessibilityHint("Asks before Mole cleans")
+            }
         }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
+        .padding(.horizontal, 10)
+        .frame(height: 34)
+        .background(RoundedRectangle(cornerRadius: 12, style: .continuous).fill(.white.opacity(hover ? 0.07 : 0)))
         .animation(Motion.quick, value: hover)
-        .accessibilityLabel("\(title), \(value)")
+    }
+
+    private var chevron: some View {
+        Image(systemName: "chevron.right").font(.system(size: 10, weight: .bold)).foregroundStyle(Theme.tertiaryText)
     }
 }
 

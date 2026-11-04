@@ -6,6 +6,7 @@ final class StatusMonitor: ObservableObject {
     static let historyLength = 32
 
     @Published var status: SystemStatus?
+    @Published var pressure: MemoryPressure?
     @Published var failed: String?
     /// Fixed-length histories (oldest first), so the sparks keep the same bar width from the start.
     @Published var rxHistory = Array(repeating: 0.0, count: historyLength)
@@ -48,8 +49,37 @@ final class StatusMonitor: ObservableObject {
         guard let data = line.data(using: .utf8),
               let s = try? JSONDecoder().decode(SystemStatus.self, from: data) else { return }
         status = s
+        pressure = MemoryPressure.now
         let rx = (s.network ?? []).compactMap(\.rx_rate_mbs).reduce(0, +)
         rxHistory = Array((rxHistory + [rx]).suffix(Self.historyLength))
+    }
+}
+
+/// What macOS itself says about memory: the number that matters, not how full RAM looks.
+enum MemoryPressure: Int32 {
+    case normal = 1, warning = 2, critical = 4
+
+    static var now: MemoryPressure? {
+        var level: Int32 = 0
+        var size = MemoryLayout<Int32>.size
+        guard sysctlbyname("kern.memorystatus_vm_pressure_level", &level, &size, nil, 0) == 0 else { return nil }
+        return MemoryPressure(rawValue: level)
+    }
+
+    var label: String {
+        switch self {
+        case .normal: "Normal"
+        case .warning: "High"
+        case .critical: "Critical"
+        }
+    }
+
+    var color: Color {
+        switch self {
+        case .normal: Theme.accent
+        case .warning: .orange
+        case .critical: Theme.danger
+        }
     }
 }
 
@@ -161,7 +191,12 @@ struct OverviewPage: View {
         let m = s?.memory
         return GlowCard(glow: .magenta, style: .rim, padding: 18) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Memory").cardTitle().frame(height: 24)
+                HStack {
+                    Text("Memory").cardTitle()
+                    Spacer()
+                    if let p = monitor.pressure, p != .normal { Tag(text: "Pressure \(p.label.lowercased())", color: p.color) }
+                }
+                .frame(height: 24)
                 MetricValue(value: String(format: "%.0f", m?.used_percent ?? 0), unit: "%", dot: 4.5, live: true)
                 DotMeter(value: (m?.used_percent ?? 0) / 100, count: 22)
                 Text("\(m?.used.bytesText ?? "–") of \(m?.total.bytesText ?? "–")").caption()

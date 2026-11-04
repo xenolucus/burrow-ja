@@ -48,6 +48,17 @@ struct CleanPage: View {
         }
         .confirmation($confirm)
         .onAppear(perform: scan.startIfNeeded)
+        .onChange(of: model.askCleanAt, initial: true) { _, at in
+            guard let at else { return }
+            model.askCleanAt = nil
+            guard Date().timeIntervalSince(at) < 5 else { return }
+            // A window just reopened from the menu bar drops an alert shown in its first layout.
+            Task {
+                try? await Task.sleep(for: .milliseconds(300))
+                if NSApp.burrowWindow?.isVisible == true, model.page == .clean, !scan.scanning,
+                   (scan.report?.total ?? 0) > 0 { askToClean() }
+            }
+        }
     }
 
     private var detail: String {
