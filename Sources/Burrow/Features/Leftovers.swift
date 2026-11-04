@@ -283,9 +283,19 @@ final class LeftoverStore: ObservableObject {
         appsSeen = now
         let stillThere = Set(now.filter { !$0.key.contains("/.Trash/") }.values)
         removed = removed.filter { !stillThere.contains($0.key) }
-        for (id, path) in Self.removedApps(seen: seen, now: now) where Self.inTrash(id, formerPath: path, now: now) {
-            removed[id] = path
+        var gone = Self.removedApps(seen: seen, now: now)
+        if !gone.isEmpty, !Self.trashReadable {
+            // Without Full Disk Access (it drops when an update changes the ad-hoc signature) the
+            // Trash cannot be checked: an app still missing a few seconds later counts as deleted,
+            // which rules out an updater swapping the bundle.
+            try? await Task.sleep(for: .seconds(4))
+            let later = await Task.detached { LeftoverStore.apps() }.value
+            let back = Set(later.filter { !$0.key.contains("/.Trash/") }.values)
+            gone = gone.filter { !back.contains($0.key) }
+        } else {
+            gone = gone.filter { Self.inTrash($0.key, formerPath: $0.value, now: now) }
         }
+        for (id, path) in gone { removed[id] = path }
         // A scan that started before this change cannot know about it: wait for it, then look again.
         if loadTask != nil { await load() }
         await load()
@@ -300,6 +310,12 @@ final class LeftoverStore: ObservableObject {
             out[id] = path
         }
         return out
+    }
+
+    /// Listing the Trash needs Full Disk Access.
+    nonisolated static var trashReadable: Bool {
+        let trash = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".Trash").path
+        return (try? FileManager.default.contentsOfDirectory(atPath: trash)) != nil
     }
 
     /// Only an app the user put in the Trash counts as deleted: an updater that swaps the bundle
