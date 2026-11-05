@@ -13,7 +13,7 @@ enum AppUpdates {
 }
 
 struct UpdatesCard: View {
-    @State private var automatic = AppUpdates.controller?.updater.automaticallyChecksForUpdates ?? false
+    @ViewState private var automatic = AppUpdates.controller?.updater.automaticallyChecksForUpdates ?? false
 
     var body: some View {
         GlowCard(glow: .sage, style: .rim, padding: 22) {

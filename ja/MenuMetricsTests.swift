@@ -2,6 +2,10 @@ import Foundation
 import Testing
 @testable import Burrow
 
+private extension String {
+    var lastPathComponentName: String { (self as NSString).lastPathComponent }
+}
+
 struct MenuMetricsTests {
     private func status(_ json: String) throws -> SystemStatus {
         try JSONDecoder().decode(SystemStatus.self, from: Data(json.utf8))
@@ -54,6 +58,28 @@ struct MenuMetricsTests {
         #expect(!ExternalDrives.isCandidate(path: "/Volumes/Unknown", isInternal: nil))
         #expect(!ExternalDrives.isCandidate(path: "/", isInternal: false))
         #expect(!ExternalDrives.isCandidate(path: "/Volumes/Backup/Sub", isInternal: false))
+    }
+
+    @Test func cachesAreMatchedNarrowly() {
+        #expect(ExternalCacheScanner.kind(name: "Media Cache Files", parent: "Adobe", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "shadercache", parent: "steamapps", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "shadercache", parent: "Work", siblings: []) == nil)
+        #expect(ExternalCacheScanner.kind(name: "Library", parent: "Game", siblings: ["Assets", "ProjectSettings"]) != nil)
+        #expect(ExternalCacheScanner.kind(name: "Library", parent: "Photos", siblings: ["Assets"]) == nil)
+        #expect(ExternalCacheScanner.kind(name: "Documents", parent: "Work", siblings: []) == nil)
+    }
+
+    @Test func scanFindsOnlyKnownFoldersAndSkipsLinks() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let cache = root.appendingPathComponent("Adobe/Media Cache Files")
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        try Data(count: 4096).write(to: cache.appendingPathComponent("a.bin"))
+        try fm.createDirectory(at: root.appendingPathComponent("Movies/Project"), withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: root.appendingPathComponent("Peak Files"), withDestinationURL: cache)
+        let found = ExternalCacheScanner.scan(root)
+        #expect(found.map(\.path.lastPathComponentName) == ["Media Cache Files"])
     }
 
     @Test func keepsOnlyKnownMetrics() {
