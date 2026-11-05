@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Builds build-ja/ (Burrow JA) from this repository's untouched Burrow sources.
+
+Run: python3 ja/apply_ja.py    then: cd build-ja && scripts/bundle.sh
+Exit 1 when a translation no longer matches the source, as after merging a Burrow update.
+"""
+from pathlib import Path
+import importlib.util
+import json
+import re
+import shutil
+import sys
+
+KIT = Path(__file__).resolve().parent
+ROOT = KIT.parent
+OUT = ROOT / "build-ja"
+NAME = "Burrow JA"
+BUNDLE_ID = "io.github.xenolucus.burrow-ja"
+REPO = "xenolucus/burrow-ja"
+
+
+def load_pairs():
+    spec = importlib.util.spec_from_file_location("pairs", KIT / "pairs.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def swift_table(table):
+    rows = "\n".join(f"        {json.dumps(k, ensure_ascii=False)}: {json.dumps(v, ensure_ascii=False)},"
+                     for k, v in sorted(table.items()))
+    return f"enum JAGenerated {{\n    static let table: [String: String] = [\n{rows}\n    ]\n}}\n"
+
+
+def replace_once(text, old, new):
+    assert old in text, f"not found: {old}"
+    return text.replace(old, new)
+
+
+def patch_bundle(text, public_key):
+    text = replace_once(text, "<string>uz.khan.burrow</string>", f"<string>{BUNDLE_ID}</string>")
+    text = replace_once(text, "<key>CFBundleName</key><string>Burrow</string>", f"<key>CFBundleName</key><string>{NAME}</string>")
+    text = replace_once(text, "<key>CFBundleDisplayName</key><string>Burrow</string>", f"<key>CFBundleDisplayName</key><string>{NAME}</string>")
+    text = replace_once(text, "khan-umirzakoff/Mole-GUI", REPO)
+    if public_key:
+        text, count = re.subn(r"(<key>SUPublicEDKey</key><string>)[^<]*", r"\g<1>" + public_key, text)
+        assert count == 1
+    else:
+        # shortcut: no key yet means no updater; add ja/sparkle_public_key.txt before a release.
+        text, count = re.subn(r"\s*<key>SU[A-Za-z]+</key>.*", "", text)
+        assert count == 4, f"expected 4 Sparkle keys, found {count}"
+    region = "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
+             "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
+    text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
+    marker = 'cat > "$APP/Contents/Info.plist" <<PLIST'
+    return replace_once(text, marker, 'mkdir -p "$APP/Contents/Resources/ja.lproj"\n' + marker)
+
+
+def rename_outputs(text):
+    return (text.replace("Burrow.app", f"{NAME}.app").replace("Burrow.zip", "BurrowJA.zip")
+            .replace("Burrow.dmg", "BurrowJA.dmg").replace("khan-umirzakoff/Mole-GUI", REPO))
+
+
+def main():
+    pairs = load_pairs()
+    if OUT.exists():
+        shutil.rmtree(OUT)
+    shutil.copytree(ROOT, OUT, ignore=shutil.ignore_patterns(".git", ".build", "build", "build-ja", "ja", "promo", "docs"))
+    sources = OUT / "Sources/Burrow"
+    missing = []
+    for name, rows in pairs.T.items():
+        path = sources / name
+        text = path.read_text(encoding="utf-8")
+        for en, ja in rows:
+            if en not in text:
+                missing.append((name, en))
+            text = text.replace(en, ja)
+        for literal in pairs.KEEP.get(name, []):
+            assert literal in text, f"{name}: parser string lost: {literal}"
+        path.write_text(text, encoding="utf-8")
+    shutil.copy2(KIT / "JA.swift", sources / "JA.swift")
+    table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))
+    (sources / "JAGenerated.swift").write_text(swift_table(table), encoding="utf-8")
+    shutil.copy2(KIT / "VERSION", OUT / "VERSION")
+    public_key = (KIT / "sparkle_public_key.txt").read_text().strip()
+    bundle = OUT / "scripts/bundle.sh"
+    bundle.write_text(patch_bundle(bundle.read_text(encoding="utf-8"), public_key), encoding="utf-8")
+    for script in ("bundle.sh", "dmg.sh", "appcast.sh"):
+        path = OUT / "scripts" / script
+        path.write_text(rename_outputs(path.read_text(encoding="utf-8")), encoding="utf-8")
+    print(f"pairs: {sum(map(len, pairs.T.values()))}, Mole strings: {len(table)}, missing: {len(missing)}, updater: {'on' if public_key else 'off'}")
+    for name, en in missing:
+        print(f"MISSING {name}: {en[:110]}")
+    sys.exit(1 if missing else 0)
+
+
+if __name__ == "__main__":
+    main()
