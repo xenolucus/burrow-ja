@@ -169,6 +169,8 @@ T = {
     R(r'''"\(items) item\(items == 1 ? "" : "s"), \(chosen.map(\.bytes).reduce(0, +).bytesText). You can restore them from the Trash."''', r'''"\(items) 項目、\(chosen.map(\.bytes).reduce(0, +).bytesText)。ゴミ箱から戻せます。"'''),
 ],
 "Features/OverviewPage.swift": [
+    R('    @Published var pressure: MemoryPressure?\n', '    @Published var pressure: MemoryPressure?\n    @Published var power: PowerMeter.Reading?\n    private let powerMeter = PowerMeter()\n'),
+    R('        pressure = MemoryPressure.now\n', '        pressure = MemoryPressure.now\n        power = powerMeter.read()\n'),
     q("Normal", "正常"), q("High", "高"), q("Critical", "危険"),
     q("Caches and logs", "キャッシュとログ"), q("Project build folders", "プロジェクトのビルドフォルダ"),
     q("Live status stopped", "ライブ表示が停止しました"), q("Restart", "再開"), q("Free space", "空き容量"),
@@ -283,6 +285,11 @@ T = {
     q("Slim apps", "スリム化する"), q("Slimming apps", "アプリをスリム化しています"),
 ],
 "Features/Tray.swift": [
+    R("""            HStack(spacing: 10) {
+                vital("CPU",""", """            PowerRow(monitor: monitor)
+
+            HStack(spacing: 10) {
+                vital("CPU","""),
     R('Text("Burrow").font(.system(size: 14', 'Text("Burrow JA").font(.system(size: 14'),
     q(r"Health \(score)", r"健康 \(score)"), q("Opens Disk Map", "ディスクマップを開く"), q("Memory", "メモリ"), q("Battery", "バッテリー"), q("Network", "ネットワーク"),
     q("Caches and logs", "キャッシュとログ"), q("Leftovers of removed apps", "削除済みアプリの残留データ"), q("Old installers", "古いインストーラ"),

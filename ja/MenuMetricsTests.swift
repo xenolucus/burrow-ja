@@ -7,17 +7,38 @@ struct MenuMetricsTests {
         try JSONDecoder().decode(SystemStatus.self, from: Data(json.utf8))
     }
 
-    @Test func formatsColumns() throws {
+    @Test func formatsCells() throws {
         let s = try status(#"""
         {"cpu":{"usage":18.4},"memory":{"used":1,"total":2,"used_percent":61.6},
+         "thermal":{"cpu_temp":0,"battery_temp":34.5},
          "disks":[{"mount":"/","used":500000000000,"total":1000000000000}],
          "network":[{"name":"en0","rx_rate_mbs":1.26,"tx_rate_mbs":0.1},{"name":"en1","rx_rate_mbs":1,"tx_rate_mbs":0}]}
         """#)
-        #expect(MenuMetric.cpu.lines(s)?.bottom == "18%")
-        #expect(MenuMetric.memory.lines(s)?.bottom == "62%")
-        #expect(MenuMetric.disk.lines(s)?.bottom == "500G")
-        #expect(MenuMetric.network.lines(s)?.top == "↑0.1" && MenuMetric.network.lines(s)?.bottom == "↓2.3")
-        #expect(MenuMetric.battery.lines(s) == nil)
+        let power = PowerMeter.Reading(inputWatts: 16.3, loadWatts: 11.1, hoursLeft: 6.32)
+        #expect(MenuMetric.cpu.cell(s, power: nil)?.bottom == "18%")
+        #expect(MenuMetric.memory.cell(s, power: nil)?.bottom == "62%")
+        #expect(MenuMetric.disk.cell(s, power: nil)?.bottom == "500G")
+        #expect(MenuMetric.temperature.cell(s, power: nil)?.bottom == "34℃" || MenuMetric.temperature.cell(s, power: nil)?.bottom == "35℃")
+        #expect(MenuMetric.network.cell(s, power: nil)?.top == "↑100K")
+        #expect(MenuMetric.network.cell(s, power: nil)?.bottom == "↓2.3M")
+        #expect(MenuMetric.power.cell(s, power: power)?.top == "入 16W")
+        #expect(MenuMetric.power.cell(s, power: power)?.bottom == "使 11W")
+        #expect(MenuMetric.runtime.cell(s, power: power)?.bottom == "6.3h")
+        #expect(MenuMetric.battery.cell(s, power: nil) == nil)
+        #expect(MenuMetric.power.cell(s, power: nil) == nil)
+    }
+
+    @Test func speedStaysShort() {
+        #expect(MenuMetric.speed(0) == "0K")
+        #expect(MenuMetric.speed(0.999) == "1.0M")
+        #expect(MenuMetric.speed(12.4) == "12M")
+    }
+
+    @Test func estimatesHoursFromRemainingEnergy() throws {
+        let hours = try #require(PowerMeter.hours(milliampHours: 5362, millivolts: 13047, watts: 11))
+        #expect(abs(hours - 6.36) < 0.01)
+        #expect(PowerMeter.hours(milliampHours: 5362, millivolts: 13047, watts: 0) == nil)
+        #expect(PowerMeter.hours(milliampHours: 0, millivolts: 13047, watts: 11) == nil)
     }
 
     @Test func keepsOnlyKnownMetrics() {
