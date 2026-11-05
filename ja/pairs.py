@@ -308,13 +308,11 @@ T = {
 ],
 }
 
-# Test expectations for text translated in Reports.swift. The timing limit stays under the 4 s SIGKILL
-# fallback; hosted runners took 3.8 s, and the exit code check still proves Mole's traps ran.
+# Test expectations for text translated in Reports.swift.
 TESTS = [
     R('hasSuffix("~/PROJECTS/c/dist and 1 more")', 'hasSuffix("~/PROJECTS/c/dist ほか 1 件")'),
     R('"Last used 2d ago"', '"最終使用: 2d ago"'),
     R('"Needs your password · /Library/LaunchDaemons"', '"パスワードが必要 · /Library/LaunchDaemons"'),
-    R('#expect(Date().timeIntervalSince(stopped) < 3)', '#expect(Date().timeIntervalSince(stopped) < 4)'),
 ]
 
 # Must survive apply: the code matches these against Mole's English output.
