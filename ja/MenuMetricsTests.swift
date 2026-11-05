@@ -28,6 +28,13 @@ struct MenuMetricsTests {
         #expect(MenuMetric.power.cell(s, power: nil) == nil)
     }
 
+    @Test func labelsCanBeHidden() {
+        let cell = MenuMetric.Cell(top: "入 16W", bottom: "使 11W", widest: "使 188W", pair: true).withoutLabels()
+        #expect(cell.top == "16W" && cell.bottom == "11W" && cell.widest == "188W")
+        let network = MenuMetric.Cell(top: "↑1K", bottom: "↓2K", widest: "↓888K", pair: true).withoutLabels()
+        #expect(network.top == "↑1K" && network.bottom == "↓2K")
+    }
+
     @Test func speedStaysShort() {
         #expect(MenuMetric.speed(0) == "0K")
         #expect(MenuMetric.speed(0.999) == "1.0M")

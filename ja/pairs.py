@@ -42,10 +42,9 @@ T = {
     q("Protection rules, scan folders, Touch ID, deleted apps", "保護ルール、スキャン対象、Touch ID、削除済みアプリ"),
 ],
 "BurrowApp.swift": [
-    R('''            CommandGroup(after: .appInfo) {
-                Button("Check for Updates…") { delegate.updater?.checkForUpdates(nil) }
-            }
-''', ''),
+    q("Check for Updates…", "アップデートを確認…"),
+    R('updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)',
+      'updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)\n            AppUpdates.controller = updater'),
     R('Window("Burrow", id: "main")', 'Window("Burrow JA", id: "main")'),
     R('Image(nsImage: TrayIcon.image)', 'TrayLabel(monitor: model.status)'),
     q("Go", "移動"), q("Slimming apps", "アプリをスリム化しています"),
@@ -247,7 +246,7 @@ T = {
     q("Will be removed", "削除予定"), q("In progress", "実行中"), q("Waiting", "待機中"), q("Failed", "失敗"),
 ],
 "Features/SettingsPage.swift": [
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'MenuMetricsCard(monitor: model.status)\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            MenuMetricsCard(monitor: model.status)\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),
@@ -285,6 +284,7 @@ T = {
     q("Slim apps", "スリム化する"), q("Slimming apps", "アプリをスリム化しています"),
 ],
 "Features/Tray.swift": [
+    R('                    Button("Settings…") { open(.settings) }\n', '                    Button("アップデートを確認…") { AppUpdates.check() }\n                    Button("Settings…") { open(.settings) }\n'),
     R("""            HStack(spacing: 10) {
                 vital("CPU",""", """            PowerRow(monitor: monitor)
 

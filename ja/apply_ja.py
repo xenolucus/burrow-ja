@@ -100,6 +100,7 @@ def main():
     tests.write_text(text, encoding="utf-8")
     shutil.copy2(KIT / "JA.swift", sources / "JA.swift")
     shutil.copy2(KIT / "MenuMetrics.swift", sources / "MenuMetrics.swift")
+    shutil.copy2(KIT / "Updates.swift", sources / "Updates.swift")
     shutil.copy2(KIT / "MenuMetricsTests.swift", OUT / "Tests/BurrowTests/MenuMetricsTests.swift")
     write_notes()
     table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))

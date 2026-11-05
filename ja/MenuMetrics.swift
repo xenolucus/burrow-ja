@@ -62,6 +62,7 @@ enum MenuMetric: String, CaseIterable, Identifiable {
 
     static let storageKey = "menuMetrics"
     static let defaultValue = "cpu,memory,network"
+    static let labelsKey = "menuLabels"
 
     var id: String { rawValue }
 
@@ -100,6 +101,15 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         var fraction: Double?
         /// Both lines are values, drawn at the same size and right-aligned.
         var pair = false
+
+        /// Keeps the arrows, which carry meaning; "入" and "使" go with the other labels.
+        func withoutLabels() -> Cell {
+            var cell = self
+            cell.top = top.replacingOccurrences(of: "入 ", with: "")
+            cell.bottom = bottom.replacingOccurrences(of: "使 ", with: "")
+            cell.widest = widest.replacingOccurrences(of: "使 ", with: "")
+            return cell
+        }
     }
 
     /// nil when this Mac does not report the value.
@@ -153,17 +163,19 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     private static let gap: CGFloat = 8
 
     /// One template image, so the menu bar tints it for light, dark and wallpaper.
-    static func image(_ metrics: [MenuMetric], style: MenuStyle, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
-        let cells = status.map { s in metrics.compactMap { m in m.cell(s, power: power).map { (m, $0) } } } ?? []
+    static func image(_ metrics: [MenuMetric], style: MenuStyle, labels: Bool, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
+        let cells = status.map { s in
+            metrics.compactMap { m in m.cell(s, power: power).map { (m, labels ? $0 : $0.withoutLabels()) } }
+        } ?? []
         guard !cells.isEmpty else { return TrayIcon.image }
-        let widths = cells.map { columnWidth($0.0, $0.1, style) }
+        let widths = cells.map { columnWidth($0.0, $0.1, style, labels: labels) }
         let icon = TrayIcon.image
         let width = icon.size.width + widths.reduce(0) { $0 + gap + $1 }
         let image = NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
             icon.draw(in: NSRect(x: 0, y: 2, width: icon.size.width, height: icon.size.height))
             var x = icon.size.width + gap
             for ((metric, cell), columnWidth) in zip(cells, widths) {
-                draw(metric, cell, style, x: x, width: columnWidth)
+                draw(metric, cell, style, labels: labels, x: x, width: columnWidth)
                 x += columnWidth + gap
             }
             return true
@@ -177,7 +189,10 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         ceil(NSAttributedString(string: text, attributes: attributes).size().width)
     }
 
-    private static func columnWidth(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle) -> CGFloat {
+    private static func columnWidth(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool) -> CGFloat {
+        if !labels, !cell.pair, style != .inline {
+            return (style == .gauge ? 7 : 0) + measure(cell.widest, line)
+        }
         switch style {
         case .inline where cell.pair:
             return measure(cell.widest + " " + cell.widest, line)
@@ -192,12 +207,23 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         }
     }
 
-    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, x: CGFloat, width: CGFloat) {
+    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, x: CGFloat, width: CGFloat) {
         func text(_ string: String, _ attributes: [NSAttributedString.Key: Any], right: CGFloat, y: CGFloat) {
             let drawn = NSAttributedString(string: string, attributes: attributes)
             drawn.draw(at: NSPoint(x: right - ceil(drawn.size().width), y: y))
         }
         let right = x + width
+        func gauge() {
+            NSColor.black.withAlphaComponent(0.3).setFill()
+            NSBezierPath(roundedRect: NSRect(x: x, y: 2, width: 3, height: 18), xRadius: 1.5, yRadius: 1.5).fill()
+            NSColor.black.setFill()
+            let height = 18 * CGFloat(min(max(cell.fraction ?? 0, 0), 1))
+            NSBezierPath(roundedRect: NSRect(x: x, y: 2, width: 3, height: height), xRadius: 1.5, yRadius: 1.5).fill()
+        }
+        if !labels, !cell.pair {
+            if style == .gauge { gauge() }
+            return text(cell.bottom, line, right: right, y: 3)
+        }
         switch style {
         case .inline where cell.pair:
             text(cell.bottom, line, right: right, y: 3)
@@ -215,11 +241,7 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             text(cell.top, value, right: right, y: 11)
             text(cell.bottom, value, right: right, y: 0)
         case .gauge:
-            NSColor.black.withAlphaComponent(0.3).setFill()
-            NSBezierPath(roundedRect: NSRect(x: x, y: 2, width: 3, height: 18), xRadius: 1.5, yRadius: 1.5).fill()
-            NSColor.black.setFill()
-            let height = 18 * CGFloat(min(max(cell.fraction ?? 0, 0), 1))
-            NSBezierPath(roundedRect: NSRect(x: x, y: 2, width: 3, height: height), xRadius: 1.5, yRadius: 1.5).fill()
+            gauge()
             text(cell.top, small, right: right, y: 11)
             text(cell.bottom, value, right: right, y: 0)
         default:
@@ -233,10 +255,11 @@ struct TrayLabel: View {
     @ObservedObject var monitor: StatusMonitor
     @AppStorage(MenuMetric.storageKey) private var stored = MenuMetric.defaultValue
     @AppStorage(MenuStyle.storageKey) private var style = MenuStyle.stacked.rawValue
+    @AppStorage(MenuMetric.labelsKey) private var labels = true
 
     var body: some View {
         Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: MenuStyle(rawValue: style) ?? .stacked,
-                                        status: monitor.status, power: monitor.power))
+                                        labels: labels, status: monitor.status, power: monitor.power))
     }
 }
 
@@ -270,6 +293,7 @@ struct MenuMetricsCard: View {
     @ObservedObject var monitor: StatusMonitor
     @AppStorage(MenuMetric.storageKey) private var stored = MenuMetric.defaultValue
     @AppStorage(MenuStyle.storageKey) private var style = MenuStyle.stacked.rawValue
+    @AppStorage(MenuMetric.labelsKey) private var labels = true
 
     var body: some View {
         GlowCard(glow: .blue, style: .rim, padding: 22) {
@@ -282,6 +306,8 @@ struct MenuMetricsCard: View {
                     }
                 }
                 .toggleStyle(.switch).controlSize(.small)
+                Toggle("ラベルを表示（CPU、MEM、入、使など）", isOn: $labels)
+                    .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
                 Text("デザイン").font(.system(size: 13, weight: .semibold))
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(MenuStyle.allCases) { option in preview(option) }
@@ -295,7 +321,7 @@ struct MenuMetricsCard: View {
             HStack(spacing: 10) {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
                 Text(option.title).font(.system(size: 13)).frame(width: 64, alignment: .leading)
-                Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: option, status: monitor.status, power: monitor.power))
+                Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: option, labels: labels, status: monitor.status, power: monitor.power))
                     .renderingMode(.template)
                 Spacer(minLength: 0)
             }
