@@ -163,17 +163,16 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     private static let gap: CGFloat = 8
 
     /// One template image, so the menu bar tints it for light, dark and wallpaper.
+    /// The app icon appears only when no value is on, so the item never disappears.
     static func image(_ metrics: [MenuMetric], style: MenuStyle, labels: Bool, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
         let cells = status.map { s in
             metrics.compactMap { m in m.cell(s, power: power).map { (m, labels ? $0 : $0.withoutLabels()) } }
         } ?? []
         guard !cells.isEmpty else { return TrayIcon.image }
         let widths = cells.map { columnWidth($0.0, $0.1, style, labels: labels) }
-        let icon = TrayIcon.image
-        let width = icon.size.width + widths.reduce(0) { $0 + gap + $1 }
+        let width = widths.reduce(0, +) + gap * CGFloat(widths.count - 1)
         let image = NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
-            icon.draw(in: NSRect(x: 0, y: 2, width: icon.size.width, height: icon.size.height))
-            var x = icon.size.width + gap
+            var x: CGFloat = 0
             for ((metric, cell), columnWidth) in zip(cells, widths) {
                 draw(metric, cell, style, labels: labels, x: x, width: columnWidth)
                 x += columnWidth + gap
