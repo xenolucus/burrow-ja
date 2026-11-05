@@ -8,3 +8,10 @@ promo/.hyperframes/
 promo/renders/
 build-ja/
 build.log
+CLAUDE.md
+AGENTS.md
+GEMINI.md
+.claude/
+.codex/
+.cursor/
+.cursorrules

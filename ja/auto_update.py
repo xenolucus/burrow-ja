@@ -24,6 +24,7 @@ VENDOR = ROOT / "Vendor/mole"
 KNOWN = KIT / "known_strings.json"
 REPORT = ROOT / "build-ja/report.md"
 MOLE_REPO = "tw93/Mole"
+AI_FILES = ["CLAUDE.md", "AGENTS.md", "GEMINI.md", ".claude", ".codex", ".cursor", ".cursorrules", ".github/copilot-instructions.md"]
 THIS_REPO = "xenolucus/burrow-ja"
 # Burrow reads these from Mole's output; a new Mole without them breaks the parsers.
 PARSER_TEXT = ["Potential space", "Would remove", "Files to be removed:", "Personal data to remove:",
@@ -39,7 +40,12 @@ def merge_burrow():
     ahead = subprocess.run(["git", "merge-base", "--is-ancestor", "upstream/main", "HEAD"], cwd=ROOT).returncode
     if ahead == 0:
         return False
-    run("git", "merge", "--no-edit", "-X", "ours", "upstream/main")
+    # A file deleted here and edited upstream stops the merge even with -X ours.
+    subprocess.run(["git", "merge", "--no-edit", "-X", "ours", "upstream/main"], cwd=ROOT)
+    for name in AI_FILES:
+        subprocess.run(["git", "rm", "-rfq", "--ignore-unmatch", name], cwd=ROOT, check=True)
+    subprocess.run(["git", "commit", "-q", "--no-edit"], cwd=ROOT)
+    assert not run("git", "diff", "--name-only", "--diff-filter=U"), "unresolved merge conflict"
     return True
 
 
