@@ -1,0 +1,85 @@
+name: Auto update
+
+on:
+  schedule:
+    - cron: "17 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: auto-update
+
+jobs:
+  update:
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Prepare git
+        run: |
+          git config user.name xenolucus
+          git config user.email 195246756+xenolucus@users.noreply.github.com
+          git remote add upstream https://github.com/khan-umirzakoff/Mole-GUI
+
+      - name: Check extractors
+        run: python3 ja/auto_update.py --selftest
+
+      - name: Merge Burrow and Mole
+        id: merge
+        run: python3 ja/auto_update.py
+
+      - name: Build and test
+        if: steps.merge.outputs.changed == 'true'
+        working-directory: build-ja
+        run: |
+          swift test
+          scripts/bundle.sh
+          scripts/dmg.sh
+          ditto -c -k --keepParent "build/Burrow JA.app" build/BurrowJA.zip
+
+      - name: Sign update
+        if: steps.merge.outputs.changed == 'true'
+        working-directory: build-ja
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+        run: |
+          test -n "$SPARKLE_PRIVATE_KEY" || { echo "Secret SPARKLE_PRIVATE_KEY is not set"; exit 1; }
+          export SPARKLE_KEY_FILE="$RUNNER_TEMP/sparkle.key"
+          printf '%s' "$SPARKLE_PRIVATE_KEY" > "$SPARKLE_KEY_FILE"
+          scripts/appcast.sh
+          rm -f "$SPARKLE_KEY_FILE"
+
+      - name: Save and release
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          VERSION: ${{ steps.merge.outputs.version }}
+          AUTO_PUBLISH: ${{ vars.AUTO_PUBLISH }}
+        run: |
+          git add -A
+          git commit -m "Update to $VERSION"
+          git push origin main
+          draft=--draft
+          [ "$AUTO_PUBLISH" = "true" ] && draft=
+          gh release create "v$VERSION" $draft --target main --title "Burrow JA $VERSION" \
+            --notes-file build-ja/report.md \
+            build-ja/build/BurrowJA.dmg build-ja/build/BurrowJA.zip build-ja/build/appcast.xml
+
+      - name: Report untranslated text
+        if: steps.merge.outputs.changed == 'true' && steps.merge.outputs.untranslated != '0'
+        env:
+          VERSION: ${{ steps.merge.outputs.version }}
+        run: gh issue create --title "未翻訳の文字列 v$VERSION" --body-file build-ja/report.md
+
+      - name: Report failure
+        if: failure()
+        run: |
+          gh issue create --title "自動更新に失敗しました" \
+            --body "配信は止めました。ログ: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

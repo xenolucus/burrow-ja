@@ -57,6 +57,7 @@ def patch_bundle(text, public_key):
 
 
 def rename_outputs(text):
+    text = text.replace('"$SIGN" "$ZIP"', '"$SIGN" ${SPARKLE_KEY_FILE:+--ed-key-file "$SPARKLE_KEY_FILE"} "$ZIP"')
     return (text.replace("Burrow.app", f"{NAME}.app").replace("Burrow.zip", "BurrowJA.zip")
             .replace("Burrow.dmg", "BurrowJA.dmg").replace("khan-umirzakoff/Mole-GUI", REPO))
 
@@ -65,7 +66,7 @@ def main():
     pairs = load_pairs()
     if OUT.exists():
         shutil.rmtree(OUT)
-    shutil.copytree(ROOT, OUT, ignore=shutil.ignore_patterns(".git", ".build", "build", "build-ja", "ja", "promo", "docs"))
+    shutil.copytree(ROOT, OUT, ignore=shutil.ignore_patterns(".git", ".github", ".build", "build", "build-ja", "ja", "promo", "docs"))
     sources = OUT / "Sources/Burrow"
     missing = []
     for name, rows in pairs.T.items():
@@ -91,7 +92,7 @@ def main():
     print(f"pairs: {sum(map(len, pairs.T.values()))}, Mole strings: {len(table)}, missing: {len(missing)}, updater: {'on' if public_key else 'off'}")
     for name, en in missing:
         print(f"MISSING {name}: {en[:110]}")
-    sys.exit(1 if missing else 0)
+    sys.exit(1 if missing and "--allow-missing" not in sys.argv else 0)
 
 
 if __name__ == "__main__":
