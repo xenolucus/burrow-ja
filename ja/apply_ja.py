@@ -79,6 +79,13 @@ def main():
         for literal in pairs.KEEP.get(name, []):
             assert literal in text, f"{name}: parser string lost: {literal}"
         path.write_text(text, encoding="utf-8")
+    tests = OUT / "Tests/BurrowTests/ParserTests.swift"
+    text = tests.read_text(encoding="utf-8")
+    for en, ja in pairs.TESTS:
+        if en not in text:
+            missing.append(("Tests", en))
+        text = text.replace(en, ja)
+    tests.write_text(text, encoding="utf-8")
     shutil.copy2(KIT / "JA.swift", sources / "JA.swift")
     table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))
     (sources / "JAGenerated.swift").write_text(swift_table(table), encoding="utf-8")
