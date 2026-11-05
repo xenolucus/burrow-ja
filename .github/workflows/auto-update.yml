@@ -36,6 +36,25 @@ jobs:
         id: merge
         run: python3 ja/auto_update.py
 
+      - name: Prepare signing
+        if: steps.merge.outputs.changed == 'true'
+        env:
+          MAC_CERT_P12: ${{ secrets.MAC_CERT_P12 }}
+          MAC_CERT_PASSWORD: ${{ secrets.MAC_CERT_PASSWORD }}
+        run: |
+          test -n "$MAC_CERT_P12" || { echo "Secret MAC_CERT_P12 is not set"; exit 1; }
+          keychain="$RUNNER_TEMP/signing.keychain-db"
+          password="$(uuidgen)"
+          security create-keychain -p "$password" "$keychain"
+          security set-keychain-settings "$keychain"
+          security unlock-keychain -p "$password" "$keychain"
+          printf '%s' "$MAC_CERT_P12" | base64 -D > "$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$keychain" -P "$MAC_CERT_PASSWORD" -T /usr/bin/codesign > /dev/null
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$password" "$keychain" > /dev/null
+          echo "SIGN_KEYCHAIN=$keychain" >> "$GITHUB_ENV"
+          echo "SIGN_IDENTITY=$(cat ja/signing_sha1.txt)" >> "$GITHUB_ENV"
+
       - name: Build and test
         if: steps.merge.outputs.changed == 'true'
         working-directory: build-ja
@@ -43,6 +62,7 @@ jobs:
           # Its 4 s limit depends on runner speed, so Stop timing is checked on a real Mac.
           swift test --skip stopReachesMoleTrapsEvenIfTheAppIgnoresSignals
           scripts/bundle.sh
+          codesign --verify --deep --strict "build/Burrow JA.app"
           scripts/dmg.sh
           ditto -c -k --keepParent "build/Burrow JA.app" build/BurrowJA.zip
 

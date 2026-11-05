@@ -20,6 +20,22 @@ BUNDLE_ID = "io.github.xenolucus.burrow-ja"
 REPO = "xenolucus/burrow-ja"
 
 
+# A fixed certificate keeps the app's identity across updates, so macOS keeps its Full Disk Access.
+# Sparkle's nested code is signed first: --deep leaves its XPC services invalid.
+STABLE_SIGNING = f'''if [ -n "${{SIGN_IDENTITY:-}}" ]; then
+    SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+    sign() {{ codesign --force --sign "$SIGN_IDENTITY" --keychain "$SIGN_KEYCHAIN" --timestamp=none "$@"; }}
+    for code in "$SPARKLE/Versions/B/XPCServices/Installer.xpc" "$SPARKLE/Versions/B/XPCServices/Downloader.xpc" \\
+                "$SPARKLE/Versions/B/Autoupdate" "$SPARKLE/Versions/B/Updater.app" "$SPARKLE"; do
+        sign --preserve-metadata=entitlements "$code"
+    done
+    sign "-r=designated => identifier \\"{BUNDLE_ID}\\" and certificate leaf = H\\"$SIGN_IDENTITY\\"" "$APP"
+else
+    codesign --force --deep --sign - "$APP"
+fi
+'''
+
+
 def load_pairs():
     spec = importlib.util.spec_from_file_location("pairs", KIT / "pairs.py")
     module = importlib.util.module_from_spec(spec)
@@ -54,6 +70,7 @@ def patch_bundle(text, public_key):
     region = "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
              "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
     text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
+    text = replace_once(text, 'codesign --force --deep --sign - "$APP"\n', STABLE_SIGNING)
     marker = 'cat > "$APP/Contents/Info.plist" <<PLIST'
     return replace_once(text, marker, 'mkdir -p "$APP/Contents/Resources/ja.lproj"\n' + marker)
 
