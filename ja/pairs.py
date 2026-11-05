@@ -301,6 +301,8 @@ T = {
     q("Uninstalling", "アンインストールしています"), q("Size unknown", "サイズ不明"), q("Show in Finder", "Finder で表示"), q("Search (⌘F)", "検索（⌘F）"),
 ],
 "RootView.swift": [
+    # "アンインストール" wraps once the row shows its status dot.
+    R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
     R('Text("Burrow").font(.system(size: 17', 'Text("Burrow JA").font(.system(size: 17'),
     q(r"Engine: Mole \(Mole.version)", r"エンジン: Mole \(Mole.version)"), q("Scanning", "スキャン中"),
 ],
