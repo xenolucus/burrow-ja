@@ -24,6 +24,7 @@ VENDOR = ROOT / "Vendor/mole"
 KNOWN = KIT / "known_strings.json"
 REPORT = ROOT / "build-ja/report.md"
 MOLE_REPO = "tw93/Mole"
+THIS_REPO = "xenolucus/burrow-ja"
 # Burrow reads these from Mole's output; a new Mole without them breaks the parsers.
 PARSER_TEXT = ["Potential space", "Would remove", "Files to be removed:", "Personal data to remove:",
                "Dry run complete", "Select Artifacts to Purge", "Select apps to slim", "System caches need sudo"]
@@ -129,6 +130,11 @@ def next_version():
     return f"{base}.1"
 
 
+def released(version):
+    """False when an earlier run saved this version but stopped before its release."""
+    return subprocess.run(["gh", "release", "view", f"v{version}", "-R", THIS_REPO], cwd=ROOT, capture_output=True).returncode == 0
+
+
 def output(**values):
     target = os.environ.get("GITHUB_OUTPUT")
     if target:
@@ -157,12 +163,13 @@ def main():
         KNOWN.write_text(json.dumps(current_strings(), ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
         return print("baseline written")
     burrow, mole = merge_burrow(), update_mole()
-    if not (burrow or mole):
+    retry = not (burrow or mole)
+    if retry and released((KIT / "VERSION").read_text().strip()):
         return output(changed="false")
     lost = parser_text_missing()
     known = json.loads(KNOWN.read_text(encoding="utf-8"))
     now = current_strings()
-    version = next_version()
+    version = (KIT / "VERSION").read_text().strip() if retry else next_version()
     (KIT / "VERSION").write_text(version + "\n")
     missing = apply_ja()
     new_ui = sorted(set(now["ui"]) - set(known["ui"]))

@@ -65,11 +65,11 @@ jobs:
           AUTO_PUBLISH: ${{ vars.AUTO_PUBLISH }}
         run: |
           git add -A
-          git commit -m "Update to $VERSION"
+          git diff --cached --quiet || git commit -m "Update to $VERSION"
           git push origin main
           draft=--draft
           [ "$AUTO_PUBLISH" = "true" ] && draft=
-          gh release create "v$VERSION" $draft --target main --title "Burrow JA $VERSION" \
+          gh release create "v$VERSION" -R "$GITHUB_REPOSITORY" $draft --target main --title "Burrow JA $VERSION" \
             --notes-file build-ja/report.md \
             build-ja/build/BurrowJA.dmg build-ja/build/BurrowJA.zip build-ja/build/appcast.xml
 
