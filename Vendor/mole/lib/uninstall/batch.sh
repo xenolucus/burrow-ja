@@ -58,22 +58,41 @@ has_sensitive_data() {
 decode_file_list() {
     local encoded="$1"
     local app_name="$2"
-    local decoded
+    local decoded_file decoded
+
+    if ! decoded_file=$(create_temp_file 2> /dev/null); then
+        log_error "Failed to create temporary file for file list $app_name" >&2
+        echo ""
+        return 0
+    fi
 
     # macOS uses -D, GNU uses -d. Always return 0 for set -e safety.
-    if ! decoded=$(printf '%s' "$encoded" | base64 -D 2> /dev/null); then
-        if ! decoded=$(printf '%s' "$encoded" | base64 -d 2> /dev/null); then
+    if ! printf '%s' "$encoded" | base64 -D > "$decoded_file" 2> /dev/null; then
+        if ! printf '%s' "$encoded" | base64 -d > "$decoded_file" 2> /dev/null; then
             log_error "Failed to decode file list for $app_name" >&2
+            rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
             echo ""
             return 0 # Return success with empty string
         fi
     fi
 
-    if [[ "$decoded" =~ $'\0' ]]; then
+    # Bash variables cannot safely carry NUL bytes, and Bash 3.2 expands
+    # $'\0' to an empty regex. Compare the decoded bytes before reading them.
+    # shellcheck disable=SC2094 # cmp only reads the exact scratch file.
+    if ! LC_ALL=C tr -d '\000' < "$decoded_file" | cmp -s - "$decoded_file"; then
         log_warning "File list for $app_name contains null bytes, rejecting" >&2
+        rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
         echo ""
         return 0 # Return success with empty string
     fi
+
+    if ! decoded=$(cat "$decoded_file"); then
+        log_error "Failed to read decoded file list for $app_name" >&2
+        rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
+        echo ""
+        return 0
+    fi
+    rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
 
     while IFS= read -r line; do
         if [[ -n "$line" && ! "$line" =~ ^/ ]]; then
@@ -96,22 +115,41 @@ decode_file_list() {
 decode_bundle_id_list() {
     local encoded="$1"
     local app_name="$2"
-    local decoded
+    local decoded_file decoded
+
+    if ! decoded_file=$(create_temp_file 2> /dev/null); then
+        log_error "Failed to create temporary file for helper id list $app_name" >&2
+        echo ""
+        return 0
+    fi
 
     # macOS uses -D, GNU uses -d. Always return 0 for set -e safety.
-    if ! decoded=$(printf '%s' "$encoded" | base64 -D 2> /dev/null); then
-        if ! decoded=$(printf '%s' "$encoded" | base64 -d 2> /dev/null); then
+    if ! printf '%s' "$encoded" | base64 -D > "$decoded_file" 2> /dev/null; then
+        if ! printf '%s' "$encoded" | base64 -d > "$decoded_file" 2> /dev/null; then
             log_error "Failed to decode helper id list for $app_name" >&2
+            rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
             echo ""
             return 0
         fi
     fi
 
-    if [[ "$decoded" =~ $'\0' ]]; then
+    # Keep this check byte-oriented for Bash 3.2 compatibility; NUL cannot be
+    # represented in a shell variable and $'\0' becomes an empty regex there.
+    # shellcheck disable=SC2094 # cmp only reads the exact scratch file.
+    if ! LC_ALL=C tr -d '\000' < "$decoded_file" | cmp -s - "$decoded_file"; then
         log_warning "Helper id list for $app_name contains null bytes, rejecting" >&2
+        rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
         echo ""
         return 0
     fi
+
+    if ! decoded=$(cat "$decoded_file"); then
+        log_error "Failed to read decoded helper id list for $app_name" >&2
+        rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
+        echo ""
+        return 0
+    fi
+    rm -f "$decoded_file" 2> /dev/null || true # SAFE: exact scratch file created above
 
     echo "$decoded"
     return 0
@@ -634,8 +672,8 @@ remove_login_item() {
         # Skip AppleScript during tests to avoid permission dialogs
         if [[ "${MOLE_TEST_MODE:-0}" != "1" && "${MOLE_TEST_NO_AUTH:-0}" != "1" ]]; then
             # Escape double quotes and backslashes for AppleScript
-            local escaped_name="${clean_name//\\/\\\\}"
-            escaped_name="${escaped_name//\"/\\\"}"
+            local escaped_name=""
+            mole_applescript_escape escaped_name "$clean_name"
 
             local login_item_rc=0 deleted_count=""
             deleted_count=$(
@@ -2224,7 +2262,7 @@ _batch_scan_app_details_impl() {
                 _batch_scan_stage="system leftover scan"
                 local system_rc=0
                 system_files=$(find_app_system_files \
-                    "$bundle_id" "$discovery_app_name") || system_rc=$?
+                    "$bundle_id" "$discovery_app_name" "$app_path") || system_rc=$?
                 if mole_rc_timeout "$system_rc"; then
                     system_files=""
                     debug_log "System leftover scan timed out for $app_name"
@@ -2732,6 +2770,13 @@ _batch_execute_removals() {
         fi
         if [[ -z "$reason" ]]; then
             if [[ "$is_brew_cask" == "true" && -n "$cask_name" ]]; then
+                # Homebrew and sudo write directly to the terminal. Stop the
+                # spinner before they do so neither can overwrite the other.
+                if [[ -t 1 ]]; then
+                    stop_inline_spinner
+                    [[ -t 2 ]] && printf '\r\033[2K' >&2
+                    printf '%s\n' "${_phase_prefix}Removing $(_uninstall_display_text "$app_name") (${_phase_size})..." >&2
+                fi
                 # Mole removes only the reviewed paths below. A cask zap can
                 # reach data that was not selected or even discovered.
                 # Use brew_uninstall_cask helper (handles env vars, timeout, verification)
@@ -3129,7 +3174,12 @@ _batch_render_summary() {
             success_line="Would remove ${success_count} ${success_text}"
         fi
         if [[ -n "$freed_display" ]]; then
-            if is_uninstall_dry_run; then
+            if [[ "${MOLE_DELETE_MODE:-permanent}" == "trash" ]]; then
+                # Bytes in the Trash are not free until it is emptied, so a
+                # Trash run states the size without claiming it was freed.
+                # Mole Mac made the same correction (uninstall.summary.freed).
+                success_line+=" · ${GREEN}${freed_display}${NC}"
+            elif is_uninstall_dry_run; then
                 success_line+=", would free ${GREEN}${freed_display}${NC}"
             else
                 success_line+=", freed ${GREEN}${freed_display}${NC}"
@@ -3242,7 +3292,7 @@ _batch_render_summary() {
         done
 
         summary_details+=("${ICON_REVIEW} System extensions may remain after removal: ${YELLOW}${ext_list}${NC}")
-        summary_details+=("${GRAY}${ICON_SUBLIST}${NC} Check ${GRAY}System Settings > General > Login Items & Extensions${NC} to remove leftover extensions")
+        summary_details+=("${GRAY}${ICON_REVIEW}${NC} Check ${GRAY}System Settings > General > Login Items & Extensions${NC} to remove leftover extensions")
     fi
 
     if [[ ${#background_items_warning_apps[@]} -gt 0 ]]; then
@@ -3265,7 +3315,7 @@ _batch_render_summary() {
         done
 
         summary_details+=("${ICON_REVIEW} Still running during uninstall, files removed but process kept alive: ${YELLOW}${running_list}${NC}")
-        summary_details+=("${GRAY}${ICON_SUBLIST}${NC} Quit the app to free its in-memory copy; reinstalling before quitting may behave oddly")
+        summary_details+=("${GRAY}${ICON_REVIEW}${NC} Quit the app to free its in-memory copy; reinstalling before quitting may behave oddly")
     fi
 
     local title="Uninstall complete"
@@ -3528,5 +3578,8 @@ batch_uninstall_applications() {
     unset -f _restore_uninstall_traps
 
     total_size_cleaned=$((total_size_cleaned + total_size_freed))
+    # Callers turn this into the exit status, so a script that runs
+    # `mo uninstall` sees a failed app (Mole CLI (Windows) exits 1 the same way).
+    MOLE_UNINSTALL_FAILED_APPS=$((${MOLE_UNINSTALL_FAILED_APPS:-0} + failed_count))
     unset failed_items
 }

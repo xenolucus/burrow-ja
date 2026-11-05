@@ -113,11 +113,10 @@ readonly ICON_SOLID="●"
 readonly ICON_LIST="•"
 readonly ICON_SUBLIST="↳"
 readonly ICON_ARROW="➤"
-readonly ICON_DRY_RUN="→"
+readonly ICON_DRY_RUN="○"
 readonly ICON_REVIEW="⊙"
 readonly ICON_NAV_UP="↑"
 readonly ICON_NAV_DOWN="↓"
-readonly ICON_INFO="ℹ"
 
 # ============================================================================
 # LaunchServices Utility
@@ -206,8 +205,10 @@ declare -a SAFETY_WHITELIST_PATTERNS=(
     # installs packages there and, by default, symlinks them into project
     # libraries, so removing it leaves those libraries dangling. Its entry is
     # spelled exactly like the old default row so saved files that still
-    # carry that line read it as this mandatory rule. Hard safety, so they
-    # merge unconditionally.
+    # carry that line read it as this mandatory rule. pnpm installs every
+    # `pnpm dlx` package under its cache dir, so a running command loses its
+    # modules when the sweep takes it, the shape of the npx loss in #1870.
+    # Hard safety, so they merge unconditionally.
     "$HOME/Library/Caches/com.apple.FontRegistry*"
     "$HOME/Library/Caches/com.apple.spotlight*"
     "$HOME/Library/Caches/com.apple.Spotlight*"
@@ -218,6 +219,11 @@ declare -a SAFETY_WHITELIST_PATTERNS=(
     "$HOME/Library/Caches/kitty"
     "$HOME/Library/Caches/pypoetry/virtualenvs*"
     "$HOME/Library/Caches/org.R-project.R/R/renv/*"
+    "$HOME/Library/Caches/pnpm/dlx*"
+    # llama.cpp downloads `-hf` model weights (multi-GB GGUF files) into its
+    # default LLAMA_CACHE here; they are user-chosen models, not a cache that
+    # rebuilds on its own. Mole Mac blocks the same folder (2026-10-29).
+    "$HOME/Library/Caches/llama.cpp"
 )
 
 # Resolve the cache root used by GitHub CLI without following filesystem
@@ -1073,6 +1079,16 @@ bytes_to_human() {
 # Convert kilobytes to human-readable format
 # Args: $1 - size in KB
 # Returns: formatted string
+# "1 item", "3 items": a count with its noun, singular for exactly one.
+mole_count_label() {
+    local count="${1:-0}" noun="$2"
+    if [[ "$count" == "1" ]]; then
+        printf '%s %s' "$count" "$noun"
+    else
+        printf '%s %ss' "$count" "$noun"
+    fi
+}
+
 bytes_to_human_kb() {
     bytes_to_human "$((${1:-0} * 1024))"
 }
@@ -1091,6 +1107,15 @@ format_free_space_delta_kb() {
     fi
 
     printf '%s%s\n' "$sign" "$(bytes_to_human_kb "$abs_kb")"
+}
+
+# Escape a value for embedding inside a double-quoted AppleScript string
+# literal: `\` first, then `"`.
+mole_applescript_escape() {
+    local _as_value="${2:-}"
+    _as_value="${_as_value//\\/\\\\}"
+    _as_value="${_as_value//\"/\\\"}"
+    printf -v "$1" '%s' "$_as_value"
 }
 
 mole_is_reverse_dns_bundle_id() {
@@ -1195,6 +1220,45 @@ format_path_link() {
     # a single-quoted printf format ending in \\ trips ShellCheck SC1003.
     local st=$'\033\\'
     printf '\033]8;;file://%s%s%s\033]8;;%s' "$(percent_encode_path "$path")" "$st" "$display" "$st"
+}
+
+# One review row: "⊙ label · value · fact". On a terminal the label itself
+# links to the path, so the row needs no command or path field; plain output
+# has no links and keeps the path as the last field. path, value and fact
+# may each be empty.
+mole_review_row() {
+    local label="$1" path="${2:-}" value="${3:-}" fact="${4:-}"
+    local shown="$label" tail=""
+    if [[ -n "$path" ]]; then
+        # Settle the check here: inside $(...) stdout is a pipe.
+        if is_ansi_supported 2> /dev/null; then
+            shown=$(format_path_link "$path" "$label")
+        else
+            tail=" · $(format_path_link "$path")"
+        fi
+    fi
+    local line="  ${YELLOW}${ICON_REVIEW}${NC} ${shown}"
+    [[ -n "$value" ]] && line+=" · ${GREEN}${value}${NC}"
+    [[ -n "$fact" ]] && line+=" · ${GRAY}${fact}${NC}"
+    echo -e "${line}${tail}"
+}
+
+# "a", "a and b", "a, b and c", then "a, b, c and 2 more".
+mole_join_names() {
+    local count=$#
+    [[ $count -gt 0 ]] || return 0
+    if [[ $count -gt 4 ]]; then
+        printf '%s, %s, %s and %s more' "$1" "$2" "$3" "$((count - 3))"
+        return 0
+    fi
+    local out="$1"
+    shift
+    while [[ $# -gt 1 ]]; do
+        out+=", $1"
+        shift
+    done
+    [[ $# -eq 1 ]] && out+=" and $1"
+    printf '%s' "$out"
 }
 
 # ============================================================================
@@ -1318,46 +1382,82 @@ prune_stale_mole_tmpdir_leftovers() {
     [[ "$uid" =~ ^[0-9]+$ ]] || return 0
 
     # Names stay relative to the root so no path is rebuilt from text. Each
-    # list holds one name per line: the token and digit-only globs leave no
+    # list holds one name per line: the token and digit-only patterns leave no
     # room for a crafted name to add a line. "/" is a pattern no name can
-    # equal, so an empty keep list still filters correctly.
+    # equal, so an empty keep list still filters correctly. Every pipeline ends
+    # in `|| true` because callers run under errexit and pipefail, where a
+    # grep that matches nothing would otherwise end the pass early.
     (
         cd "$resolved_root" 2> /dev/null || exit 0
-        local token_glob='mole.[A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9][A-Za-z0-9]'
-        local registries live_registries keep
 
-        registries=$(find . -mindepth 1 -maxdepth 1 -name 'mole.registry.[1-9]*' \
-            ! -name 'mole.registry.*[!0-9]*' -user "$uid" -type f -print 2> /dev/null |
-            sed 's#^\./mole\.registry\.##') || exit 0
-        live_registries=$(printf '%s\n' "$registries" |
-            grep -xF -f <(printf '%s\n' "$live_pids") 2> /dev/null) || live_registries=""
+        # What it takes is a day old, so one complete pass a day finds all of
+        # it. Listing this root is the cost: about half a second per listing
+        # on a long-lived Mac (126,196 entries on 2026-10-31), paid by every
+        # mo command before its first line, four listings per run before this.
+        local stamp="mole.prune-stamp"
+        if [[ -f "$stamp" && ! -L "$stamp" ]] &&
+            [[ -n "$(find "$stamp" -maxdepth 0 -mmin "-$max_age_minutes" -print 2> /dev/null)" ]]; then
+            exit 0
+        fi
+
+        # One listing of the root that also answers every attribute question,
+        # tagged per line: O an old one-link file, D an old empty folder, A any
+        # other regular file. Names never go back onto a command line, where
+        # tens of thousands of them exceed the argument limit. Any failure,
+        # including one exec batch, ends the pass with nothing removed and no
+        # stamp. The tag and "./" anchor every match, so a name holding a
+        # newline cannot turn its tail into an untagged candidate.
+        local listing
+        listing=$("$FIND_BSD" . -mindepth 1 -maxdepth 1 -name 'mole.*' -user "$uid" \( \
+            \( -type f -links 1 -mmin "+$max_age_minutes" -exec printf 'O%s\n' {} + \) -o \
+            \( -type f -exec printf 'A%s\n' {} + \) -o \
+            \( -type d -empty -mmin "+$max_age_minutes" -exec printf 'D%s\n' {} + \) \
+            \) 2> /dev/null) || exit 0
+
+        local old_files old_dirs registries old_registries
+        old_files=$(printf '%s\n' "$listing" |
+            sed -n -E 's#^O\./(mole\.[A-Za-z0-9]{6})$#\1#p') || exit 0
+        old_dirs=$(printf '%s\n' "$listing" |
+            sed -n -E 's#^D\./(mole\.[A-Za-z0-9]{6})$#\1#p') || exit 0
+        registries=$(printf '%s\n' "$listing" |
+            sed -n -E 's#^[OA]\./mole\.registry\.([1-9][0-9]*)$#\1#p') || exit 0
+        old_registries=$(printf '%s\n' "$listing" |
+            sed -n -E 's#^O\./mole\.registry\.([1-9][0-9]*)$#\1#p') || exit 0
+
+        local live_registries="" keep="/" registry_contents
+        if [[ -n "$registries" ]]; then
+            live_registries=$(printf '%s\n' "$registries" |
+                grep -xF -f <(printf '%s\n' "$live_pids") 2> /dev/null) || live_registries=""
+        fi
 
         # A Mole run that has been open for more than a day still owns the
         # entries its registry lists, however old they are.
-        keep="/"
         if [[ -n "$live_registries" ]]; then
-            keep+=$'\n'$(printf '%s\n' "$live_registries" | sed 's#^#mole.registry.#' |
-                tr '\n' '\0' | xargs -0 cat -- 2> /dev/null | sed 's#^.*/##' |
+            # A partial read cannot prove any old entry is unowned. Separate
+            # read success from the valid case where filtering finds no names.
+            registry_contents=$(printf '%s\n' "$live_registries" | sed 's#^#mole.registry.#' |
+                tr '\n' '\0' | xargs -0 cat -- 2> /dev/null) || exit 0
+            keep+=$'\n'$(printf '%s\n' "$registry_contents" | sed 's#^.*/##' |
                 grep -xE 'mole\.[A-Za-z0-9]{6}' 2> /dev/null) || true
         fi
 
-        find . -mindepth 1 -maxdepth 1 -name "$token_glob" -user "$uid" \
-            -mmin "+$max_age_minutes" -type f -links 1 -print 2> /dev/null |
-            sed 's#^\./##' | grep -vxF -f <(printf '%s\n' "$keep") 2> /dev/null |
-            tr '\n' '\0' | xargs -0 rm -f -- 2> /dev/null # SAFE: unowned Mole temp names in the Darwin temp root only
-        # rmdir refuses a folder that gained content since the scan.
-        find . -mindepth 1 -maxdepth 1 -name "$token_glob" -user "$uid" \
-            -mmin "+$max_age_minutes" -type d -empty -print 2> /dev/null |
-            sed 's#^\./##' | grep -vxF -f <(printf '%s\n' "$keep") 2> /dev/null |
-            tr '\n' '\0' | xargs -0 rmdir -- 2> /dev/null
+        if [[ -n "$old_files" ]]; then
+            printf '%s\n' "$old_files" | grep -vxF -f <(printf '%s\n' "$keep") 2> /dev/null |
+                tr '\n' '\0' | xargs -0 rm -f -- 2> /dev/null || true # SAFE: unowned Mole temp names in the Darwin temp root only
+        fi
+        if [[ -n "$old_dirs" ]]; then
+            # rmdir refuses a folder that gained content since the scan.
+            printf '%s\n' "$old_dirs" | grep -vxF -f <(printf '%s\n' "$keep") 2> /dev/null |
+                tr '\n' '\0' | xargs -0 rmdir -- 2> /dev/null || true
+        fi
+        if [[ -n "$old_registries" ]]; then
+            printf '%s\n' "$old_registries" |
+                grep -vxF -f <(printf '%s\n' "$live_pids") 2> /dev/null |
+                sed 's#^#mole.registry.#' | tr '\n' '\0' |
+                xargs -0 rm -f -- 2> /dev/null || true # SAFE: dead-owner Mole registries in the Darwin temp root only
+        fi
 
-        find . -mindepth 1 -maxdepth 1 -name 'mole.registry.[1-9]*' \
-            ! -name 'mole.registry.*[!0-9]*' -user "$uid" \
-            -mmin "+$max_age_minutes" -type f -links 1 -print 2> /dev/null |
-            sed 's#^\./mole\.registry\.##' |
-            grep -vxF -f <(printf '%s\n' "$live_pids") 2> /dev/null |
-            sed 's#^#mole.registry.#' | tr '\n' '\0' |
-            xargs -0 rm -f -- 2> /dev/null # SAFE: dead-owner Mole registries in the Darwin temp root only
+        [[ -L "$stamp" ]] || touch "$stamp" 2> /dev/null || true
         exit 0
     ) || true
 }
@@ -1675,7 +1775,7 @@ safe_clear_line() {
 }
 
 # Update progress spinner if enough time has elapsed
-# Usage: update_progress_if_needed <completed> <total> <last_update_time_var> [interval]
+# Usage: update_progress_if_needed <completed> <total> <last_update_time_var> [interval] [label]
 # Example: update_progress_if_needed "$completed" "$total" last_progress_update 2
 # Returns: 0 if updated, 1 if skipped
 update_progress_if_needed() {
@@ -1683,6 +1783,7 @@ update_progress_if_needed() {
     local total="$2"
     local last_update_var="$3" # Name of variable holding last update time
     local interval="${4:-2}"   # Default: update every 2 seconds
+    local label="${5:-}"       # What is being scanned, named in the spinner
 
     # Get current time. Callers tick once per item, so anchor $SECONDS to the
     # epoch once per shell instead of forking date on every call; the sum is
@@ -1702,7 +1803,11 @@ update_progress_if_needed() {
     if [[ $((current_time - last_time)) -ge $interval ]]; then
         # Update the spinner text in place; restarting it here blinked the
         # line on every progress tick.
-        start_section_spinner "Scanning items... $completed/$total"
+        if [[ -n "$label" ]]; then
+            start_section_spinner "Scanning ${label}, $completed/$total..."
+        else
+            start_section_spinner "Scanning items... $completed/$total"
+        fi
 
         # Update the last_update_time variable
         # eval: indirect write by name; bash 3.2 has no nameref

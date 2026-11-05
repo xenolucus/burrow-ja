@@ -947,7 +947,7 @@ opt_spotlight_index_optimize() {
                     optimize_task_result "$MOLE_OPTIMIZE_OUTCOME_SKIPPED"
                     return 0
                 fi
-                echo -e "  ${BLUE}${ICON_INFO}${NC} Spotlight search is slow, rebuilding index, may take 1-2 hours"
+                echo -e "  ${BLUE}${ICON_ADMIN}${NC} Spotlight search is slow, rebuilding index, may take 1-2 hours"
                 if sudo mdutil -E / > /dev/null 2>&1; then
                     opt_msg "Spotlight index rebuild started"
                     echo -e "  ${GRAY}Indexing will continue in background${NC}"
@@ -1021,7 +1021,13 @@ opt_prune_spotlight_orphan_rules() {
                 # Only act on well-formed bundle ids; bundle_has_installed_app
                 # double-checks with mdfind and a filesystem scan, so a return of
                 # 1 means the app is genuinely gone. Anything else is kept.
-                if ! mole_is_reverse_dns_bundle_id "$entry"; then
+                # Spotlight stores its own switches here too, such as
+                # Custom.relatedContents (Show Related Content), which pass the
+                # reverse-DNS shape but name no app; removing one flips the
+                # switch back on (#1878). Only a lowercase first label, the
+                # shape Mole Mac's spotlightRuleNamesAnApp accepts, can be an app.
+                if ! mole_is_reverse_dns_bundle_id "$entry" ||
+                    [[ ! "${entry%%.*}" =~ ^[a-z0-9]+$ ]]; then
                     keep+=("$entry")
                 else
                     local resolver_rc=0
