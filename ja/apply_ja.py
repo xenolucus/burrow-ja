@@ -5,6 +5,7 @@ Run: python3 ja/apply_ja.py    then: cd build-ja && scripts/bundle.sh
 Exit 1 when a translation no longer matches the source, as after merging a Burrow update.
 """
 from pathlib import Path
+import html
 import importlib.util
 import json
 import re
@@ -49,6 +50,7 @@ def patch_bundle(text, public_key):
         # shortcut: no key yet means no updater; add ja/sparkle_public_key.txt before a release.
         text, count = re.subn(r"\s*<key>SU[A-Za-z]+</key>.*", "", text)
         assert count == 4, f"expected 4 Sparkle keys, found {count}"
+    text = text.replace("<key>SUAutomaticallyUpdate</key><true/>", "<key>SUAutomaticallyUpdate</key><false/>")
     region = "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
              "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
     text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
@@ -57,9 +59,19 @@ def patch_bundle(text, public_key):
 
 
 def rename_outputs(text):
+    text = text.replace("      <title>Burrow $VERSION</title>\n",
+                        "      <title>Burrow $VERSION</title>\n      <description><![CDATA[$(cat \"$OUT/notes.html\")]]></description>\n")
     text = text.replace('"$SIGN" "$ZIP"', '"$SIGN" ${SPARKLE_KEY_FILE:+--ed-key-file "$SPARKLE_KEY_FILE"} "$ZIP"')
     return (text.replace("Burrow.app", f"{NAME}.app").replace("Burrow.zip", "BurrowJA.zip")
             .replace("Burrow.dmg", "BurrowJA.dmg").replace("khan-umirzakoff/Mole-GUI", REPO))
+
+
+def write_notes():
+    """ja/NOTES.txt, one change per line, becomes the text in Sparkle's update window."""
+    lines = [html.escape(line) for line in (KIT / "NOTES.txt").read_text(encoding="utf-8").splitlines() if line.strip()]
+    (OUT / "build").mkdir(exist_ok=True)
+    body = "".join(f"<li>{line}</li>" for line in lines) or "<li>細かな修正</li>"
+    (OUT / "build/notes.html").write_text(f"<ul>{body}</ul>", encoding="utf-8")
 
 
 def main():
@@ -87,6 +99,9 @@ def main():
         text = text.replace(en, ja)
     tests.write_text(text, encoding="utf-8")
     shutil.copy2(KIT / "JA.swift", sources / "JA.swift")
+    shutil.copy2(KIT / "MenuMetrics.swift", sources / "MenuMetrics.swift")
+    shutil.copy2(KIT / "MenuMetricsTests.swift", OUT / "Tests/BurrowTests/MenuMetricsTests.swift")
+    write_notes()
     table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))
     (sources / "JAGenerated.swift").write_text(swift_table(table), encoding="utf-8")
     shutil.copy2(KIT / "VERSION", OUT / "VERSION")

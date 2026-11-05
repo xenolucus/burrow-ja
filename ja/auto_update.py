@@ -168,6 +168,8 @@ def main():
     if "--baseline" in sys.argv:
         KNOWN.write_text(json.dumps(current_strings(), ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
         return print("baseline written")
+    old_burrow = (ROOT / "VERSION").read_text().strip()
+    old_mole = (VENDOR / "VERSION").read_text().strip()
     burrow, mole = merge_burrow(), update_mole()
     retry = not (burrow or mole)
     if retry and released((KIT / "VERSION").read_text().strip()):
@@ -177,11 +179,19 @@ def main():
     now = current_strings()
     version = (KIT / "VERSION").read_text().strip() if retry else next_version()
     (KIT / "VERSION").write_text(version + "\n")
+    notes = KIT / "NOTES.txt"
+    changes = [f"Burrow を {old_burrow} から {(ROOT / 'VERSION').read_text().strip()} に更新しました。"] if burrow else []
+    changes += [f"Mole を {old_mole} から {(VENDOR / 'VERSION').read_text().strip()} に更新しました。"] if mole else []
+    with notes.open("a", encoding="utf-8") as out:
+        out.writelines(line + "\n" for line in changes)
     missing = apply_ja()
+    written = [line for line in notes.read_text(encoding="utf-8").splitlines() if line.strip()]
+    notes.write_text("", encoding="utf-8")
     new_ui = sorted(set(now["ui"]) - set(known["ui"]))
     new_mole = sorted(set(now["mole"]) - set(known["mole"]))
     KNOWN.write_text(json.dumps(now, ensure_ascii=False, indent=0) + "\n", encoding="utf-8")
     lines = [f"Burrow {(ROOT / 'VERSION').read_text().strip()} / Mole {(VENDOR / 'VERSION').read_text().strip()}", ""]
+    lines += ["## 更新内容", "", *[f"- {line}" for line in written], ""]
     for title, rows in (("当たらなくなった対訳", missing), ("新しいアプリの文字列", new_ui), ("新しい Mole の文字列", new_mole)):
         if rows:
             lines += [f"## {title}（{len(rows)} 件）", "", "```", *rows, "```", ""]
