@@ -93,6 +93,11 @@ T = {
       r"\(entry.name) をゴミ箱に入れられませんでした。macOS か別のユーザーのものかもしれません。"),
 ],
 "Features/CleanPage.swift": [
+    R("""            if let report {
+                Notes(notes: report.notes.filter""", """            ExternalCleanCard(model: model)
+
+            if let report {
+                Notes(notes: report.notes.filter"""),
     q("Found so far", "ここまでの検出量"), q("Ready to clean", "クリーン可能"), q("Clean now", "今すぐクリーン"),
     q("Include system caches", "システムキャッシュを含める"),
     q("Mole asks for your administrator password while cleaning", "クリーン中に Mole が管理者パスワードを確認します"),
@@ -246,7 +251,7 @@ T = {
     q("Will be removed", "削除予定"), q("In progress", "実行中"), q("Waiting", "待機中"), q("Failed", "失敗"),
 ],
 "Features/SettingsPage.swift": [
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            MenuMetricsCard(monitor: model.status)\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ExperimentalCard()\n\n            MenuMetricsCard(monitor: model.status)\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),

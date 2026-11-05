@@ -48,6 +48,14 @@ struct MenuMetricsTests {
         #expect(PowerMeter.hours(milliampHours: 0, millivolts: 13047, watts: 11) == nil)
     }
 
+    @Test func onlyExternalVolumesAreOffered() {
+        #expect(ExternalDrives.isCandidate(path: "/Volumes/Backup", isInternal: false))
+        #expect(!ExternalDrives.isCandidate(path: "/Volumes/Macintosh HD", isInternal: true))
+        #expect(!ExternalDrives.isCandidate(path: "/Volumes/Unknown", isInternal: nil))
+        #expect(!ExternalDrives.isCandidate(path: "/", isInternal: false))
+        #expect(!ExternalDrives.isCandidate(path: "/Volumes/Backup/Sub", isInternal: false))
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)
