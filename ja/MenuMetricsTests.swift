@@ -228,6 +228,52 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func alertsRepeatOnlyAfterTheirInterval() {
+        let now = Date()
+        #expect(DiskAlert.isDue(last: nil, every: 60, now: now))
+        #expect(!DiskAlert.isDue(last: now.addingTimeInterval(-59), every: 60, now: now))
+        #expect(DiskAlert.isDue(last: now.addingTimeInterval(-60), every: 60, now: now))
+    }
+
+    @Test func heavyAppsAddUpHelpersAndSkipSystemAndSelf() {
+        let text = """
+         40.0 /Applications/Discord.app/Contents/MacOS/Discord
+         20.5 /Applications/Discord.app/Contents/Frameworks/Discord Helper.app/Contents/MacOS/Discord Helper
+         90.0 /System/Applications/Mail.app/Contents/MacOS/Mail
+         50.0 /usr/libexec/rtcreportingd
+         70.0 /Applications/Burrow JA.app/Contents/MacOS/Burrow
+          1.0 /Applications/Quiet.app/Contents/MacOS/Quiet
+        """
+        let apps = HeavyApps.parse(text, own: "/Applications/Burrow JA.app")
+        #expect(apps == [HeavyApp(path: "/Applications/Discord.app", cpu: 60.5)])
+        #expect(apps[0].name == "Discord")
+    }
+
+    @Test func manualGuideCoversDockerWithoutRunningAnything() {
+        #expect(ManualGuide.all["Docker Desktop data"]?.command == "docker system prune -a")
+    }
+
+    @Test func duplicatesCompareContentAndAlwaysKeepOneCopy() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let one = Data(repeating: 1, count: 2_000_000), other = Data(repeating: 2, count: 2_000_000)
+        try one.write(to: root.appendingPathComponent("a.bin"))
+        try one.write(to: root.appendingPathComponent("b.bin"))
+        try other.write(to: root.appendingPathComponent("sameSizeOnly.bin"))
+        try Data(repeating: 1, count: 10).write(to: root.appendingPathComponent("tiny1"))
+        try Data(repeating: 1, count: 10).write(to: root.appendingPathComponent("tiny2"))
+        try FileManager.default.linkItem(at: root.appendingPathComponent("a.bin"), to: root.appendingPathComponent("hardlink.bin"))
+        let groups = DuplicateFinder.scan([root])
+        #expect(groups.count == 1)
+        #expect(groups[0].files.count == 2)
+        #expect(groups[0].extra == 2_000_000)
+        let kept = groups[0].files[0].path
+        let removed = DuplicateFinder.allButNewest(groups)
+        #expect(!removed.contains(kept) && removed.count == 1)
+        #expect(!DuplicateFinder.canSelect(kept, in: groups[0], selected: removed))
+    }
+
     @Test func remainingReadsTheNewestRunOfEachKind() {
         let log = """
         [2026-11-06 09:00:00] [clean run=old] SKIPPED /h/Library/Caches/gone (protected)

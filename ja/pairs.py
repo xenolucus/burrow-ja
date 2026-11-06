@@ -19,11 +19,11 @@ PLACES = "ダウンロード、デスクトップ、メール、Telegram"
 T = {
 "AppModel.swift": [
     R('case overview, clean, uninstall, optimize, analyze, projects, installers, slim, history, settings',
-      'case overview, clean, uninstall, optimize, analyze, projects, installers, drives, slim, menubar, history, totals, settings'),
-    R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n        case .menubar: "メニューバー"\n'),
-    R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n        case .menubar: "menubar.rectangle"\n'),
-    R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives, .menubar: .blue'),
-    R('        case .slim: "Drop the Intel half of universal apps"\n', '        case .slim: "Drop the Intel half of universal apps"\n        case .drives: "外付けドライブの状態と古い動画"\n        case .menubar: "表示する値、間隔、まとめ"\n'),
+      'case overview, clean, uninstall, optimize, analyze, projects, installers, drives, duplicates, slim, menubar, history, totals, settings'),
+    R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n        case .duplicates: "重複ファイル"\n        case .menubar: "メニューバー"\n'),
+    R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n        case .duplicates: "doc.on.doc"\n        case .menubar: "menubar.rectangle"\n'),
+    R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives, .duplicates, .menubar: .blue'),
+    R('        case .slim: "Drop the Intel half of universal apps"\n', '        case .slim: "Drop the Intel half of universal apps"\n        case .drives: "外付けドライブの状態と古い動画"\n        case .duplicates: "同じ内容のファイルを探して整理"\n        case .menubar: "表示する値、間隔、まとめ"\n'),
     R('        case .history: "History"\n', '        case .history: "History"\n        case .totals: "累計"\n'),
     R('        case .history: "clock.arrow.circlepath"\n', '        case .history: "clock.arrow.circlepath"\n        case .totals: "chart.bar.fill"\n'),
     R('case .overview, .history: .violet', 'case .overview, .history, .totals: .violet'),
@@ -41,6 +41,7 @@ T = {
                 MenuHider.shared.start()
             }
             Task { _ = await TotalsStore.sync() }
+            Task { await DiskAlert.watch(self) }
 """),
     # Swift 6.2.3 cannot pick Task.init here, with or without translation.
     R('MainActor.assumeIsolated { Task { await self?.refreshStale() } }',
@@ -112,6 +113,26 @@ T = {
       r"\(entry.name) をゴミ箱に入れられませんでした。macOS か別のユーザーのものかもしれません。"),
 ],
 "Features/CleanPage.swift": [
+    R('confirm = .init(title: "Clean', 'let action = ConfirmAction(title: "Clean'),
+    R('''                scan.start()
+            }
+        }
+    }
+}
+
+/// "Rescan" that''', '''                scan.start()
+            }
+        }
+        if UserDefaults.standard.bool(forKey: DiskAlert.skipCleanConfirmKey) { action.action() } else { confirm = action }
+    }
+}
+
+/// "Rescan" that'''),
+    R("""            if let report {
+                if !report.notes.isEmpty {""", """            HeavyAppsCard()
+
+            if let report {
+                if !report.notes.isEmpty {"""),
     R("""            if let report {
                 Notes(notes: report.notes.filter""", """            RemainingCard(confirm: $confirm, refresh: scan.finishedAt)
 
@@ -275,7 +296,7 @@ T = {
 ],
 "Features/SettingsPage.swift": [
     R('VStack(alignment: .leading, spacing: 18) {\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard(', 'VStack(alignment: .leading, spacing: 18) {\n            MaxCleanCard(entries: $whitelist)\n\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard('),
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            AlertsCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),
@@ -292,6 +313,7 @@ T = {
     q("Add a path", "パスを追加"), q("Choose a folder", "フォルダを選択"), q("None yet", "まだありません"), q("Remove", "削除"), q(r"Remove \(entry)", r"\(entry) を削除"),
 ],
 "Features/Shared.swift": [
+    R('case .info: Tag(text: "Manual"', 'case .info:\n                ManualGuideButton(name: item.name)\n                Tag(text: "Manual"'),
     q("Checked just now", "たった今確認"),
     q(r"Checked \(date.formatted(.relative(presentation: .named)))", r"確認: \(date.formatted(.relative(presentation: .named)))"),
     q("Mole could not finish", "Mole は完了できませんでした"), q("Looking…", "確認中…"), q("Not scanned yet", "未スキャン"),
@@ -350,7 +372,7 @@ T = {
 "RootView.swift": [
     R('            ForEach(Page.allCases) { page in\n                if page == .history', '            ForEach(Page.sidebar(order: pageOrder, hidden: hiddenPages)) { page in\n                if page == .history'),
     R('struct Sidebar: View {\n', 'struct Sidebar: View {\n    @AppStorage(Page.orderKey) private var pageOrder = ""\n    @AppStorage(Page.hiddenKey) private var hiddenPages = ""\n'),
-    R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .menubar: MenuBarPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
+    R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .duplicates: DuplicatesPage()\n        case .menubar: MenuBarPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
     # "アンインストール" wraps once the row shows its status dot.
     R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
     R('Text("Burrow").font(.system(size: 17', 'Text("Burrow JA").font(.system(size: 17'),
