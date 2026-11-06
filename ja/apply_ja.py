@@ -121,6 +121,7 @@ def main():
     shutil.copy2(KIT / "ExternalClean.swift", sources / "ExternalClean.swift")
     shutil.copy2(KIT / "TotalsPage.swift", sources / "TotalsPage.swift")
     shutil.copy2(KIT / "DrivesPage.swift", sources / "DrivesPage.swift")
+    shutil.copy2(KIT / "MenuSpacing.swift", sources / "MenuSpacing.swift")
     shutil.copy2(KIT / "MenuMetricsTests.swift", OUT / "Tests/BurrowTests/MenuMetricsTests.swift")
     write_notes()
     table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))
