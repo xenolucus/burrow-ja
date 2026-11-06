@@ -194,10 +194,10 @@ struct MenuMetricsTests {
     }
 
     @Test func hideListAllowsEverythingElse() {
-        let list = HideList.make(running: ["a", "b", "self"], hidden: ["b", "quit"])
+        let list = HideList.make(running: ["a", "b"], hidden: ["b", "quit"], own: "self")
         #expect(list.allowed == ["a", "self"])
-        #expect(list == HideList.make(running: ["self", "b", "a"], hidden: ["quit", "b"]))
-        #expect(list != HideList.make(running: ["a", "b", "c", "self"], hidden: ["b", "quit"]))
+        #expect(list == HideList.make(running: ["self", "b", "a"], hidden: ["quit", "b"], own: "self"))
+        #expect(list != HideList.make(running: ["a", "b", "c"], hidden: ["b", "quit"], own: "self"))
     }
 
     @Test func labelsKeepTheirPlaceForEverydayValues() {

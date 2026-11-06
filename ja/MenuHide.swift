@@ -10,8 +10,10 @@ struct HideList: Equatable {
     var hidden: Set<String>
     var allowed: Set<String>
 
-    static func make(running: [String], hidden: Set<String>) -> HideList {
-        HideList(hidden: hidden, allowed: Set(running).subtracting(hidden))
+    /// `own` is always allowed: right after launch the app may not be in the running list yet,
+    /// and leaving it out hides its own menu bar items.
+    static func make(running: [String], hidden: Set<String>, own: String?) -> HideList {
+        HideList(hidden: hidden, allowed: Set(running + [own].compactMap { $0 }).subtracting(hidden))
     }
 }
 
@@ -43,7 +45,8 @@ final class MenuGroupBar: NSObject {
             items.removeValue(forKey: id).map(NSStatusBar.system.removeStatusItem)
         }
         for group in groups {
-            let item = items[group.id] ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            // Wider than a square, because a tight system spacing otherwise joins it to the next item.
+            let item = items[group.id] ?? NSStatusBar.system.statusItem(withLength: 32)
             items[group.id] = item
             item.button?.image = NSImage(systemSymbolName: group.symbol, accessibilityDescription: group.name)
             item.button?.image?.isTemplate = true
@@ -456,7 +459,7 @@ final class MenuHider: ObservableObject {
     private func apply() {
         guard enabled, !revealed, !hidden.isEmpty else { return restriction?.release() ?? () }
         let running = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
-        restriction?.apply(.make(running: running, hidden: Self.stillHidden(hidden, passing: passing)))
+        restriction?.apply(.make(running: running, hidden: Self.stillHidden(hidden, passing: passing), own: Bundle.main.bundleIdentifier))
     }
 
     /// The allow-list is a snapshot, so an app that starts later needs a new one to stay visible.

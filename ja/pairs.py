@@ -35,7 +35,11 @@ T = {
                 status.acquire("menubar")
             }
             MenuMetric.pauseWhileScreensSleep(status)
-            MenuHider.shared.start()
+            // After launch finishes: a status item made earlier never reaches the menu bar.
+            Task {
+                try? await Task.sleep(for: .seconds(1))
+                MenuHider.shared.start()
+            }
             Task { _ = await TotalsStore.sync() }
 """),
     # Swift 6.2.3 cannot pick Task.init here, with or without translation.
