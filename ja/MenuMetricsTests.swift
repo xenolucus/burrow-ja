@@ -223,6 +223,11 @@ struct MenuMetricsTests {
         #expect(!MenuHider.listable("me", own: "me"))
     }
 
+    @Test func onePressLetsOneAppThrough() {
+        #expect(MenuHider.stillHidden(["a", "b"], passing: "a") == ["b"])
+        #expect(MenuHider.stillHidden(["a", "b"], passing: nil) == ["a", "b"])
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)

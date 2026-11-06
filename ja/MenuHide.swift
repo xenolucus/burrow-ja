@@ -82,6 +82,9 @@ final class MenuHider: ObservableObject {
 
     private var restriction: MenuBarRestriction?
     private var revealTask: Task<Void, Never>?
+    private var pressTask: Task<Void, Never>?
+    /// The hidden app let through for a moment, so its item can be pressed.
+    private var passing: String?
     private var watching = false
 
     /// macOS only allows the private call for apps in /Applications.
@@ -192,14 +195,60 @@ final class MenuHider: ObservableObject {
         }
     }
 
-    func open(_ id: String) {
-        NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.activate()
+    /// The group's click: shows just this app's item and presses it, so its own menu opens.
+    /// shortcut: hides again after a fixed time, not when the menu closes; watch the menu to upgrade.
+    func press(_ id: String) {
+        pressTask?.cancel()
+        passing = id
+        apply()
+        pressTask = Task {
+            var pressed = false
+            let deadline = ContinuousClock.now + .seconds(4)
+            while !pressed, ContinuousClock.now < deadline, !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(150))
+                pressed = await Task.detached(priority: .userInitiated) { Self.pressMenuBarItem(of: id) }.value
+            }
+            if !pressed { NSRunningApplication.runningApplications(withBundleIdentifier: id).first?.activate() }
+            try? await Task.sleep(for: .seconds(Self.revealSeconds))
+            guard !Task.isCancelled else { return }
+            passing = nil
+            apply()
+        }
+    }
+
+    /// `MenuBarAgent` holds one window per display; each slot's child belongs to the app drawing it.
+    private nonisolated static func pressMenuBarItem(of id: String) -> Bool {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first else { return false }
+        func children(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return [] }
+            return value as? [AXUIElement] ?? []
+        }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 1)
+        for window in children(app, kAXWindowsAttribute) {
+            for slot in children(window, kAXChildrenAttribute) {
+                guard let owner = children(slot, kAXChildrenAttribute).first else { continue }
+                var pid: pid_t = 0
+                AXUIElementGetPid(owner, &pid)
+                if NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == id {
+                    AXUIElementSetMessagingTimeout(owner, 1)
+                    return AXUIElementPerformAction(owner, kAXPressAction as CFString) == .success
+                }
+            }
+        }
+        return false
+    }
+
+    /// What stays hidden once `passing` is let through.
+    nonisolated static func stillHidden(_ hidden: Set<String>, passing: String?) -> Set<String> {
+        passing.map { hidden.subtracting([$0]) } ?? hidden
     }
 
     private func apply() {
         guard enabled, !revealed, !hidden.isEmpty else { return restriction?.release() ?? () }
         let running = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
-        restriction?.apply(.make(running: running, hidden: hidden))
+        restriction?.apply(.make(running: running, hidden: Self.stillHidden(hidden, passing: passing)))
     }
 
     /// The allow-list is a snapshot, so an app that starts later needs a new one to stay visible.
@@ -218,26 +267,42 @@ final class MenuHider: ObservableObject {
     }
 }
 
-/// The one place every hidden app lives: a row in the menu bar card.
-struct HiddenAppsRow: View {
+/// The group icon's panel: every hidden app in one place.
+struct MenuGroupView: View {
     @ObservedObject private var hider = MenuHider.shared
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
-        if hider.enabled, !hider.hidden.isEmpty {
-            HStack(spacing: 6) {
+        VStack(alignment: .leading, spacing: 10) {
+            if hider.hiddenApps.isEmpty {
+                Text("「設定」でアプリを隠すと、ここにまとまります。").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+            }
+            LazyVGrid(columns: Array(repeating: GridItem(.fixed(64)), count: 4), spacing: 8) {
                 ForEach(hider.hiddenApps) { app in
-                    Button { hider.open(app.id) } label: {
-                        Image(nsImage: app.icon).resizable().frame(width: 22, height: 22).padding(3)
+                    Button {
+                        dismiss()
+                        hider.press(app.id)
+                    } label: {
+                        VStack(spacing: 3) {
+                            Image(nsImage: app.icon).resizable().frame(width: 30, height: 30)
+                            Text(app.name).font(.system(size: 10)).lineLimit(1)
+                        }
+                        .frame(width: 60).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).help(app.name).accessibilityLabel(app.name)
+                    .buttonStyle(.plain).help(app.name)
                 }
-                Spacer(minLength: 0)
-                Button(hider.revealed ? "表示中" : "30秒表示") { hider.reveal() }
+            }
+            if !hider.hiddenApps.isEmpty {
+                Button(hider.revealed ? "表示中" : "すべて30秒表示") { hider.reveal() }
                     .font(.system(size: 12)).buttonStyle(.link).disabled(hider.revealed)
             }
-            .padding(.horizontal, 12).padding(.vertical, 8)
-            .background(RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.06)))
         }
+        .padding(12)
+        .frame(width: 300)
+        .background(Theme.background)
+        .environment(\.colorScheme, .dark)
+        .foregroundStyle(.white)
+        .onAppear { hider.refreshApps() }
     }
 }
 
@@ -276,7 +341,7 @@ struct MenuHideCard: View {
                     Toggle("オン", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
-                Text("選んだアプリの項目を隠し、メニューバーのカードにまとめます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
+                Text("選んだアプリの項目を隠し、四角いアイコンにまとめます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
                 if let problem = hider.problem {
                     Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
                 }
