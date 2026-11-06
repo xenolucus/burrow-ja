@@ -42,7 +42,7 @@ enum TotalsStore {
         return records
     }
 
-    /// Burrow's own moves to a drive's Trash never reach Mole's history.
+    /// Burrow's own deletions on a drive never reach Mole's history.
     static func addExternal(bytes: Int64) {
         guard bytes > 0 else { return }
         save(load() + [TotalRecord(id: UUID().uuidString, kind: "external", bytes: bytes, date: Date())])

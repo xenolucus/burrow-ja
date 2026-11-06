@@ -44,6 +44,18 @@ struct ExternalCache: Identifiable, Hashable {
         }.map(\.path))
     }
 
+    /// Deletes for good, skipping anything that left `root` or became a link since the scan.
+    /// Returns the paths that could not be removed.
+    static func remove(_ paths: [String], under root: String) -> [String] {
+        let fm = FileManager.default
+        return paths.filter { path in
+            let inside = URL(fileURLWithPath: path).standardizedFileURL.path.hasPrefix(root + "/")
+            let isLink = (try? fm.destinationOfSymbolicLink(atPath: path)) != nil
+            guard inside, !isLink else { return true }
+            return (try? fm.removeItem(atPath: path)) == nil
+        }
+    }
+
     static func split(_ chosen: [ExternalCache]) -> (trash: [String], mole: [String]) {
         (chosen.filter { !$0.byMole }.map(\.path), chosen.filter(\.byMole).map(\.path))
     }
@@ -172,7 +184,7 @@ struct ExternalCleanCard: View {
             }
         }
         if failed > 0 {
-            Text("\(failed) 項目をゴミ箱に入れられませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+            Text("\(failed) 項目を削除できませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
         }
         if !caches.isEmpty {
             Text("チェックを外した項目は残します。").caption()
@@ -214,10 +226,9 @@ struct ExternalCleanCard: View {
         let plan = ExternalCache.split(chosen)
         let bytes = chosen.map(\.bytes).reduce(0, +).bytesText
         var message = bytes + "。"
-        if !plan.trash.isEmpty { message += "キャッシュはゴミ箱に移動します。空き容量が増えるのは、ゴミ箱を空にしたあとです。" }
-        if !plan.mole.isEmpty { message += "Mac の不要ファイルは Mole が完全に削除します。" }
+        message += "選んだ項目を完全に削除します。ゴミ箱には入らず、元に戻せません。ドライブのゴミ箱に今ある物は消しません。"
         confirm = .init(title: "\(chosen.count) 項目をクリーンしますか？", message: message, button: "クリーン") {
-            let left = Trash.move(plan.trash)
+            let left = ExternalCache.remove(plan.trash, under: scanned?.path ?? "/nonexistent")
             failed = left.count
             TotalsStore.addExternal(bytes: chosen.filter { plan.trash.contains($0.path) && !left.contains($0.path) }.map(\.bytes).reduce(0, +))
             caches = caches?.filter { !selected.contains($0.path) || left.contains($0.path) }

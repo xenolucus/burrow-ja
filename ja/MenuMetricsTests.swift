@@ -137,6 +137,22 @@ struct MenuMetricsTests {
         #expect(!ExternalCache.preselected(found, adobeRunning: true).contains("/Volumes/SSD/.adobeTemp"))
     }
 
+    @Test func removalStaysInsideTheDrive() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        let drive = root.appendingPathComponent("Drive"), outside = root.appendingPathComponent("Other")
+        let cache = drive.appendingPathComponent("Media Cache"), link = drive.appendingPathComponent("Peak Files")
+        try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        try fm.createDirectory(at: outside, withIntermediateDirectories: true)
+        try fm.createSymbolicLink(at: link, withDestinationURL: outside)
+        let base = drive.standardizedFileURL.path
+        let left = ExternalCache.remove([cache.path, link.path, outside.path], under: base)
+        #expect(!fm.fileExists(atPath: cache.path))
+        #expect(left == [link.path, outside.path])
+        #expect(fm.fileExists(atPath: outside.path) && (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil)
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)
