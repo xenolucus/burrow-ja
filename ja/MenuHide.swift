@@ -1,4 +1,5 @@
 import AppKit
+import ScreenCaptureKit
 import SwiftUI
 
 // Hiding on macOS 27 is adapted from Ellipsis by Ronny Haryanto (Apache-2.0),
@@ -129,6 +130,8 @@ final class MenuHider: ObservableObject {
     @Published private(set) var groups = MenuGroup.load(saved: UserDefaults.standard.data(forKey: groupsKey),
                                                         legacy: UserDefaults.standard.stringArray(forKey: legacyHiddenKey) ?? [])
     private let bar = MenuGroupBar()
+    /// Pictures of the real menu bar items. macOS 27 keeps no per-item window to read them from.
+    @Published private(set) var itemIcons: [String: NSImage] = [:]
     var hidden: Set<String> { Set(groups.flatMap(\.apps)) }
     @Published private(set) var revealed = false
     @Published private(set) var problem: String?
@@ -261,8 +264,13 @@ final class MenuHider: ObservableObject {
 
     func setHidden(_ app: String, _ on: Bool, in group: String) {
         for index in groups.indices { groups[index].apps.removeAll { $0 == app } }
-        if on, let index = groups.firstIndex(where: { $0.id == group }) { groups[index].apps.append(app) }
-        save()
+        guard on else { return save() }
+        Task {
+            await captureIcons([app])  // while it is still drawn, so nothing flashes
+            guard let index = groups.firstIndex(where: { $0.id == group }) else { return save() }
+            groups[index].apps.append(app)
+            save()
+        }
     }
 
     /// Shows the real items for a moment, then hides them again by itself.
@@ -280,6 +288,47 @@ final class MenuHider: ObservableObject {
 
     /// The group's click: shows just this app's item and presses it, so its own menu opens.
     /// shortcut: hides again after a fixed time, not when the menu closes; watch the menu to upgrade.
+    private static func iconFile(_ id: String) -> URL {
+        let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "burrow-ja").appendingPathComponent("menu-icons")
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".png")
+    }
+
+    func itemIcon(_ id: String) -> NSImage? {
+        itemIcons[id] ?? NSImage(contentsOf: Self.iconFile(id))
+    }
+
+    /// Runs only on request or when an app is added, so the menu bar is never watched.
+    /// Takes the item from the screen while it is drawn; a collapsed item keeps the app icon.
+    func captureIcons(_ ids: [String]) async {
+        guard CGPreflightScreenCaptureAccess() else {
+            CGRequestScreenCaptureAccess()
+            problem = "実物のアイコンには画面収録の許可が必要です。許可してから「アイコンを更新」を押してください。"
+            return
+        }
+        problem = nil
+        for id in ids {
+            let frame = await Task.detached(priority: .userInitiated) { Self.itemFrame(of: id) }.value
+            guard let frame, let shot = try? await SCScreenshotManager.captureImage(in: frame) else { continue }
+            let image = NSImage(cgImage: shot, size: frame.size)
+            itemIcons[id] = image
+            try? NSBitmapImageRep(cgImage: shot).representation(using: .png, properties: [:])?.write(to: Self.iconFile(id), options: .atomic)
+        }
+    }
+
+    /// Shows every hidden item for a moment, because only a drawn item can be pictured.
+    func refreshIcons() {
+        revealed = true
+        apply()
+        Task {
+            try? await Task.sleep(for: .milliseconds(1500))
+            await captureIcons(Array(hidden))
+            revealed = false
+            apply()
+        }
+    }
+
     func press(_ id: String) {
         pressTask?.cancel()
         passing = id
@@ -299,9 +348,26 @@ final class MenuHider: ObservableObject {
         }
     }
 
-    /// `MenuBarAgent` holds one window per display; each slot's child belongs to the app drawing it.
     private nonisolated static func pressMenuBarItem(of id: String) -> Bool {
-        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first else { return false }
+        guard let owner = menuBarSlot(of: id)?.owner else { return false }
+        AXUIElementSetMessagingTimeout(owner, 1)
+        return AXUIElementPerformAction(owner, kAXPressAction as CFString) == .success
+    }
+
+    private nonisolated static func itemFrame(of id: String) -> CGRect? {
+        guard let slot = menuBarSlot(of: id)?.slot else { return nil }
+        var position: CFTypeRef?, size: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(slot, kAXPositionAttribute as CFString, &position) == .success,
+              AXUIElementCopyAttributeValue(slot, kAXSizeAttribute as CFString, &size) == .success else { return nil }
+        var origin = CGPoint.zero, extent = CGSize.zero
+        AXValueGetValue(position as! AXValue, .cgPoint, &origin)
+        AXValueGetValue(size as! AXValue, .cgSize, &extent)
+        return extent.width > 0 ? CGRect(origin: origin, size: extent) : nil
+    }
+
+    /// `MenuBarAgent` holds one window per display; each slot's child belongs to the app drawing it.
+    private nonisolated static func menuBarSlot(of id: String) -> (slot: AXUIElement, owner: AXUIElement)? {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first else { return nil }
         func children(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
             var value: CFTypeRef?
             guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return [] }
@@ -314,13 +380,10 @@ final class MenuHider: ObservableObject {
                 guard let owner = children(slot, kAXChildrenAttribute).first else { continue }
                 var pid: pid_t = 0
                 AXUIElementGetPid(owner, &pid)
-                if NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == id {
-                    AXUIElementSetMessagingTimeout(owner, 1)
-                    return AXUIElementPerformAction(owner, kAXPressAction as CFString) == .success
-                }
+                if NSRunningApplication(processIdentifier: pid)?.bundleIdentifier == id { return (slot, owner) }
             }
         }
-        return false
+        return nil
     }
 
     /// What stays hidden once `passing` is let through.
@@ -372,18 +435,26 @@ struct MenuGroupView: View {
                         close()
                         hider.press(app.id)
                     } label: {
-                        VStack(spacing: 3) {
-                            Image(nsImage: app.icon).resizable().frame(width: 30, height: 30)
-                            Text(app.name).font(.system(size: 10)).lineLimit(1)
+                        Group {
+                            if let icon = hider.itemIcon(app.id) {
+                                Image(nsImage: icon)
+                            } else {
+                                Image(nsImage: app.icon).resizable().frame(width: 20, height: 20)
+                            }
                         }
-                        .frame(width: 60).contentShape(Rectangle())
+                        .frame(width: 60, height: 30).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).help(app.name)
+                    .buttonStyle(.plain).help(app.name).accessibilityLabel(app.name)
                 }
             }
             if !apps.isEmpty {
-                Button(hider.revealed ? "表示中" : "すべて30秒表示") { hider.reveal() }
-                    .font(.system(size: 12)).buttonStyle(.link).disabled(hider.revealed)
+                HStack {
+                    Button(hider.revealed ? "表示中" : "すべて30秒表示") { hider.reveal() }
+                        .disabled(hider.revealed)
+                    Spacer()
+                    Button("アイコンを更新") { hider.refreshIcons() }.disabled(hider.revealed)
+                }
+                .font(.system(size: 12)).buttonStyle(.link)
             }
         }
         .padding(12)
