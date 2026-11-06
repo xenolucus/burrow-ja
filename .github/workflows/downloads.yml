@@ -1,0 +1,50 @@
+name: Download stats
+
+on:
+  schedule:
+    - cron: "37 21 * * *"
+  workflow_dispatch:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Publish counts to the stats branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # appcast.xml is fetched on every update check, so only the DMG and ZIP count.
+          gh api "repos/$GITHUB_REPOSITORY/releases" --paginate --jq '.[]
+            | select(.draft | not)
+            | [.tag_name, (.published_at[:10]),
+               ([.assets[] | select(.name == "BurrowJA.dmg") | .download_count] | add // 0),
+               ([.assets[] | select(.name == "BurrowJA.zip") | .download_count] | add // 0)]
+            | @tsv' > rows.tsv
+          mkdir stats
+          dmg=$(awk -F'\t' '{s+=$3} END {print s+0}' rows.tsv)
+          zip=$(awk -F'\t' '{s+=$4} END {print s+0}' rows.tsv)
+          badge() { printf '{"schemaVersion":1,"label":"%s","message":"%s","color":"3b6fd4"}\n' "$1" "$2"; }
+          badge "downloads" "$dmg" > stats/downloads.json
+          badge "updates" "$zip" > stats/updates.json
+          {
+            echo "# Burrow JA のダウンロード数"
+            echo
+            echo "毎日更新します。初回ダウンロードは DMG、アプリ内更新は ZIP の数です。下書きのまま削除した版は含みません。"
+            echo
+            echo "| バージョン | 公開日 | ダウンロード | アプリ内更新 |"
+            echo "|---|---|---:|---:|"
+            awk -F'\t' '{printf "| %s | %s | %s | %s |\n", $1, $2, $3, $4}' rows.tsv
+            echo "| 合計 | | $dmg | $zip |"
+          } > stats/README.md
+          cd stats
+          git init -q -b stats
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .
+          git commit -qm "Update download stats"
+          git push -qf "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" stats
