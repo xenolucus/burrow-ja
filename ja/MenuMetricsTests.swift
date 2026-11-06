@@ -228,6 +228,20 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func maxCleanLiftsOnlyReplaceableCachesAndRestoresThem() {
+        let home = NSHomeDirectory()
+        let saved = ["\(home)/Library/Caches/JetBrains*", "~/.gradle/caches/*", "~/Library/Mobile Documents*", "~/mine"]
+        let on = MaxClean.entries(saved, on: true)
+        #expect(on == ["~/Library/Mobile Documents*", "~/mine"])
+        #expect(MaxClean.isOn(on))
+        #expect(!MaxClean.isOn(saved))
+        let off = MaxClean.entries(on, on: false)
+        #expect(!MaxClean.isOn(off))
+        #expect(Set(off).isSuperset(of: MaxClean.replaceable + ["~/mine"]))
+        #expect(!MaxClean.isOn([]))
+        #expect(MaxClean.entries([], on: true).contains("~/Library/Mobile Documents*"))
+    }
+
     @Test func pagesCycleThroughEveryGroupAndAll() {
         let groups = [MenuGroup(id: "1"), MenuGroup(id: "2")]
         #expect(MenuHider.nextPage(after: nil, groups: groups) == "1")

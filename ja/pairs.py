@@ -272,6 +272,7 @@ T = {
     q("Will be removed", "削除予定"), q("In progress", "実行中"), q("Waiting", "待機中"), q("Failed", "失敗"),
 ],
 "Features/SettingsPage.swift": [
+    R('VStack(alignment: .leading, spacing: 18) {\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard(', 'VStack(alignment: .leading, spacing: 18) {\n            MaxCleanCard(entries: $whitelist)\n\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard('),
     R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
