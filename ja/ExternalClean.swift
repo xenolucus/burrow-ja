@@ -130,7 +130,7 @@ struct ExternalCleanCard: View {
     private let unmounts = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)
 
     var body: some View {
-        if enabled {
+        if enabled, !Page.isHidden(.drives) {
             GlowCard(glow: .ember, style: .rim, padding: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("外付けドライブ（試験的）").cardTitle()

@@ -260,6 +260,18 @@ struct MenuMetricsTests {
         #expect(badge[8] > badge[9])
     }
 
+    @Test func sidebarOrderAndExtras() {
+        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .slim, .menubar]
+        #expect(Page.main(order: "", hidden: "") == standard)
+        #expect(Page.sidebar(order: "", hidden: "").suffix(3) == [.history, .totals, .settings])
+        let reordered = Page.main(order: "clean,overview", hidden: "drives,menubar")
+        #expect(reordered.prefix(2) == [.clean, .overview] && !reordered.contains(.drives) && !reordered.contains(.menubar))
+        #expect(reordered.contains(.slim))
+        #expect(!Page.sidebar(order: "", hidden: "totals").contains(.totals))
+        #expect(Page.moved(.overview, by: -1, in: standard) == nil)
+        #expect(Page.moved(.clean, by: -1, in: standard)?.first == .clean)
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)

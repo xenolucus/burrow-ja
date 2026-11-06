@@ -382,7 +382,8 @@ struct TrayLabel: View {
     var body: some View {
         let look = MenuLook(style: MenuStyle(rawValue: style) ?? .stacked, labels: labels, gap: gap, fixedWidth: fixedWidth,
                             leading: leading, trailing: trailing, offset: offset, lineGap: lineGap)
-        Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), look: look, status: monitor.status, power: monitor.power))
+        Image(nsImage: Page.isHidden(.menubar) ? TrayIcon.image
+              : MenuMetric.image(MenuMetric.selected(stored), look: look, status: monitor.status, power: monitor.power))
     }
 }
 

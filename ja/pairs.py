@@ -19,7 +19,7 @@ PLACES = "ダウンロード、デスクトップ、メール、Telegram"
 T = {
 "AppModel.swift": [
     R('case overview, clean, uninstall, optimize, analyze, projects, installers, slim, history, settings',
-      'case overview, clean, uninstall, optimize, analyze, projects, installers, slim, drives, menubar, history, totals, settings'),
+      'case overview, clean, uninstall, optimize, analyze, projects, installers, drives, slim, menubar, history, totals, settings'),
     R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n        case .menubar: "メニューバー"\n'),
     R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n        case .menubar: "menubar.rectangle"\n'),
     R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives, .menubar: .blue'),
@@ -31,7 +31,7 @@ T = {
       '        case .history: "Everything Mole changed, newest first"\n        case .totals: "これまでに整理した容量"\n'),
     R("""            removals.start()
 """, """            removals.start()
-            if !MenuMetric.selected(UserDefaults.standard.string(forKey: MenuMetric.storageKey) ?? MenuMetric.defaultValue).isEmpty {
+            if !Page.isHidden(.menubar), !MenuMetric.selected(UserDefaults.standard.string(forKey: MenuMetric.storageKey) ?? MenuMetric.defaultValue).isEmpty {
                 status.acquire("menubar")
             }
             MenuMetric.pauseWhileScreensSleep(status)
@@ -60,6 +60,7 @@ T = {
     q("Protection rules, scan folders, Touch ID, deleted apps", "保護ルール、スキャン対象、Touch ID、削除済みアプリ"),
 ],
 "BurrowApp.swift": [
+    R('                ForEach(Page.allCases) { page in\n                    Button(page.title)', '                ForEach(Page.current) { page in\n                    Button(page.title)'),
     q("Check for Updates…", "アップデートを確認…"),
     R('updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)',
       'updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)\n            AppUpdates.controller = updater'),
@@ -271,7 +272,7 @@ T = {
     q("Will be removed", "削除予定"), q("In progress", "実行中"), q("Waiting", "待機中"), q("Failed", "失敗"),
 ],
 "Features/SettingsPage.swift": [
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),
@@ -344,6 +345,8 @@ T = {
     q("Uninstalling", "アンインストールしています"), q("Size unknown", "サイズ不明"), q("Show in Finder", "Finder で表示"), q("Search (⌘F)", "検索（⌘F）"),
 ],
 "RootView.swift": [
+    R('            ForEach(Page.allCases) { page in\n                if page == .history', '            ForEach(Page.sidebar(order: pageOrder, hidden: hiddenPages)) { page in\n                if page == .history'),
+    R('struct Sidebar: View {\n', 'struct Sidebar: View {\n    @AppStorage(Page.orderKey) private var pageOrder = ""\n    @AppStorage(Page.hiddenKey) private var hiddenPages = ""\n'),
     R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .menubar: MenuBarPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
     # "アンインストール" wraps once the row shows its status dot.
     R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
