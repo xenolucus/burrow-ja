@@ -177,8 +177,24 @@ struct MenuMetricsTests {
         #expect(MenuSpacing.label(7) == "7 pt")
     }
 
+    @Test func metricsMoveWithinTheirOrder() {
+        #expect(MenuMetric.moved(.cpu, by: 1, in: [.cpu, .memory]) == [.memory, .cpu])
+        #expect(MenuMetric.moved(.cpu, by: -1, in: [.cpu, .memory]) == nil)
+        #expect(MenuMetric.moved(.memory, by: 1, in: [.cpu, .memory]) == nil)
+    }
+
+    @Test func everyStyleDrawsInTheMenuBarHeight() throws {
+        let s = try status(#"{"cpu":{"usage":18.4},"memory":{"used":1,"total":2,"used_percent":61.6},"network":[{"name":"en0","rx_rate_mbs":1,"tx_rate_mbs":0}]}"#)
+        for style in MenuStyle.allCases {
+            for labels in [true, false] {
+                let image = MenuMetric.image([.cpu, .memory, .network], style: style, labels: labels, gap: 8, status: s, power: nil)
+                #expect(image.size.height == 22 && image.size.width > 40)
+            }
+        }
+    }
+
     @Test func keepsOnlyKnownMetrics() {
-        #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
+        #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)
     }
 }

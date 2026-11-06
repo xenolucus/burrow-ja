@@ -34,6 +34,7 @@ T = {
             if !MenuMetric.selected(UserDefaults.standard.string(forKey: MenuMetric.storageKey) ?? MenuMetric.defaultValue).isEmpty {
                 status.acquire("menubar")
             }
+            MenuMetric.pauseWhileScreensSleep(status)
             Task { _ = await TotalsStore.sync() }
 """),
     # Swift 6.2.3 cannot pick Task.init here, with or without translation.
@@ -185,6 +186,8 @@ T = {
     R(r'''"\(items) item\(items == 1 ? "" : "s"), \(chosen.map(\.bytes).reduce(0, +).bytesText). You can restore them from the Trash."''', r'''"\(items) 項目、\(chosen.map(\.bytes).reduce(0, +).bytesText)。ゴミ箱から戻せます。"'''),
 ],
 "Features/OverviewPage.swift": [
+    R('"--interval", "2s"', '"--interval", MenuMetric.intervalArgument'),
+    R('    func release(_ owner: String) {\n', '    var isRunning: Bool { task != nil }\n    func pause() { stop() }\n    func resume() { if !owners.isEmpty { start() } }\n\n    func release(_ owner: String) {\n'),
     R('    @Published var pressure: MemoryPressure?\n', '    @Published var pressure: MemoryPressure?\n    @Published var power: PowerMeter.Reading?\n    private let powerMeter = PowerMeter()\n'),
     R('        pressure = MemoryPressure.now\n', '        pressure = MemoryPressure.now\n        power = powerMeter.read()\n'),
     q("Normal", "正常"), q("High", "高"), q("Critical", "危険"),

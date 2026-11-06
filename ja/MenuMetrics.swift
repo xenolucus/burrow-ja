@@ -41,7 +41,7 @@ final class PowerMeter {
 
 /// How the columns look in the menu bar.
 enum MenuStyle: String, CaseIterable, Identifiable {
-    case stacked, inline, gauge, symbol
+    case stacked, inline, gauge, symbol, pill, bold, mini, underline
 
     static let storageKey = "menuStyle"
     var id: String { rawValue }
@@ -52,8 +52,15 @@ enum MenuStyle: String, CaseIterable, Identifiable {
         case .inline: "1行"
         case .gauge: "メーター"
         case .symbol: "アイコン"
+        case .pill: "枠"
+        case .bold: "太字"
+        case .mini: "極小"
+        case .underline: "下線メーター"
         }
     }
+
+    /// These draw the same with labels off; the older styles swap to a larger value instead.
+    var keepsLayoutWithoutLabels: Bool { self == .pill || self == .bold || self == .mini || self == .underline }
 }
 
 /// One live value in the menu bar.
@@ -63,6 +70,27 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     static let storageKey = "menuMetrics"
     static let defaultValue = "cpu,memory,network"
     static let labelsKey = "menuLabels"
+    static let gapKey = "menuGap"
+    static let defaultGap = 8.0
+    static let intervalKey = "menuInterval"
+    static let defaultInterval = 5
+
+    /// How often `mo status` samples; every value and the card share this one stream.
+    static var intervalArgument: String {
+        let seconds = UserDefaults.standard.integer(forKey: intervalKey)
+        return "\(seconds > 0 ? seconds : defaultInterval)s"
+    }
+
+    /// Nothing can read the menu bar while the screens sleep, so the stream stops with them.
+    static func pauseWhileScreensSleep(_ monitor: StatusMonitor) {
+        let center = NSWorkspace.shared.notificationCenter
+        center.addObserver(forName: NSWorkspace.screensDidSleepNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { monitor.pause() }
+        }
+        center.addObserver(forName: NSWorkspace.screensDidWakeNotification, object: nil, queue: .main) { _ in
+            MainActor.assumeIsolated { monitor.resume() }
+        }
+    }
 
     var id: String { rawValue }
 
@@ -153,18 +181,26 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     }
 
     static func selected(_ stored: String) -> [MenuMetric] {
-        let names = stored.split(separator: ",").map(String.init)
-        return allCases.filter { names.contains($0.rawValue) }
+        stored.split(separator: ",").compactMap { MenuMetric(rawValue: String($0)) }
+    }
+
+    /// The new order after moving `metric` by `offset`, or nil at either end.
+    static func moved(_ metric: MenuMetric, by offset: Int, in order: [MenuMetric]) -> [MenuMetric]? {
+        guard let index = order.firstIndex(of: metric), order.indices.contains(index + offset) else { return nil }
+        var result = order
+        result.swapAt(index, index + offset)
+        return result
     }
 
     private static let small: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 8, weight: .medium)]
     private static let value: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 10, weight: .semibold)]
     private static let line: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)]
-    private static let gap: CGFloat = 8
+    private static let bold: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 13, weight: .bold)]
+    private static let tiny: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedDigitSystemFont(ofSize: 9, weight: .medium)]
 
     /// One template image, so the menu bar tints it for light, dark and wallpaper.
     /// The app icon appears only when no value is on, so the item never disappears.
-    static func image(_ metrics: [MenuMetric], style: MenuStyle, labels: Bool, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
+    static func image(_ metrics: [MenuMetric], style: MenuStyle, labels: Bool, gap: CGFloat, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
         let cells = status.map { s in
             metrics.compactMap { m in m.cell(s, power: power).map { (m, labels ? $0 : $0.withoutLabels()) } }
         } ?? []
@@ -189,10 +225,20 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     }
 
     private static func columnWidth(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool) -> CGFloat {
-        if !labels, !cell.pair, style != .inline {
+        if !labels, !cell.pair, style != .inline, !style.keepsLayoutWithoutLabels {
             return (style == .gauge ? 7 : 0) + measure(cell.widest, line)
         }
         switch style {
+        case .pill where cell.pair:
+            return measure(cell.widest, value) + 10
+        case .pill:
+            return measure(cell.widest, line) + 10
+        case .bold where !cell.pair:
+            return measure(cell.widest, bold)
+        case .mini:
+            return cell.pair ? measure(cell.widest, tiny) : measure(miniLabel(cell, labels) + cell.widest, tiny)
+        case .underline where !cell.pair:
+            return measure(cell.widest, line)
         case .inline where cell.pair:
             return measure(cell.widest + " " + cell.widest, line)
         case .inline:
@@ -205,6 +251,8 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             return max(measure(cell.widest, value), cell.pair ? 0 : measure(cell.top, small))
         }
     }
+
+    private static func miniLabel(_ cell: Cell, _ labels: Bool) -> String { labels ? cell.top + " " : "" }
 
     private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, x: CGFloat, width: CGFloat) {
         func text(_ string: String, _ attributes: [NSAttributedString.Key: Any], right: CGFloat, y: CGFloat) {
@@ -219,11 +267,35 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             let height = 18 * CGFloat(min(max(cell.fraction ?? 0, 0), 1))
             NSBezierPath(roundedRect: NSRect(x: x, y: 2, width: 3, height: height), xRadius: 1.5, yRadius: 1.5).fill()
         }
-        if !labels, !cell.pair {
+        if !labels, !cell.pair, !style.keepsLayoutWithoutLabels {
             if style == .gauge { gauge() }
             return text(cell.bottom, line, right: right, y: 3)
         }
         switch style {
+        case .pill:
+            NSColor.black.setStroke()
+            let frame = NSBezierPath(roundedRect: NSRect(x: x + 0.5, y: 1.5, width: width - 1, height: 19), xRadius: 5, yRadius: 5)
+            frame.lineWidth = 1
+            frame.stroke()
+            if cell.pair {
+                text(cell.top, value, right: right - 5, y: 10)
+                text(cell.bottom, value, right: right - 5, y: 1)
+            } else {
+                text(cell.bottom, line, right: right - 5, y: 3)
+            }
+        case .bold where !cell.pair:
+            text(cell.bottom, bold, right: right, y: 2)
+        case .mini where cell.pair:
+            text(cell.top, tiny, right: right, y: 11)
+            text(cell.bottom, tiny, right: right, y: 1)
+        case .mini:
+            text(miniLabel(cell, labels) + cell.bottom, tiny, right: right, y: 5)
+        case .underline where !cell.pair:
+            text(cell.bottom, line, right: right, y: 6)
+            NSColor.black.withAlphaComponent(0.3).setFill()
+            NSBezierPath(rect: NSRect(x: x, y: 2, width: width, height: 2)).fill()
+            NSColor.black.setFill()
+            NSBezierPath(rect: NSRect(x: x, y: 2, width: width * CGFloat(min(max(cell.fraction ?? 0, 0), 1)), height: 2)).fill()
         case .inline where cell.pair:
             text(cell.bottom, line, right: right, y: 3)
             text(cell.top, line, right: right - measure(cell.widest + " ", line), y: 3)
@@ -255,10 +327,11 @@ struct TrayLabel: View {
     @AppStorage(MenuMetric.storageKey) private var stored = MenuMetric.defaultValue
     @AppStorage(MenuStyle.storageKey) private var style = MenuStyle.stacked.rawValue
     @AppStorage(MenuMetric.labelsKey) private var labels = true
+    @AppStorage(MenuMetric.gapKey) private var gap = MenuMetric.defaultGap
 
     var body: some View {
         Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: MenuStyle(rawValue: style) ?? .stacked,
-                                        labels: labels, status: monitor.status, power: monitor.power))
+                                        labels: labels, gap: gap, status: monitor.status, power: monitor.power))
     }
 }
 
@@ -293,20 +366,37 @@ struct MenuMetricsCard: View {
     @AppStorage(MenuMetric.storageKey) private var stored = MenuMetric.defaultValue
     @AppStorage(MenuStyle.storageKey) private var style = MenuStyle.stacked.rawValue
     @AppStorage(MenuMetric.labelsKey) private var labels = true
+    @AppStorage(MenuMetric.gapKey) private var gap = MenuMetric.defaultGap
+    @AppStorage(MenuMetric.intervalKey) private var interval = MenuMetric.defaultInterval
+
+    private var selected: [MenuMetric] { MenuMetric.selected(stored) }
 
     var body: some View {
         GlowCard(glow: .blue, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("メニューバーの表示").cardTitle()
-                Text("オンにした値を2秒ごとに更新します。すべてオフにすると測定を止めます。").caption()
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 190), alignment: .leading)], alignment: .leading, spacing: 10) {
-                    ForEach(MenuMetric.allCases) { metric in
-                        Toggle(metric.title, isOn: binding(metric)).font(.system(size: 13))
-                    }
+                Text("オンにした順に左から並びます。矢印で順番を変えられます。すべてオフにすると測定を止めます。").caption()
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(selected + MenuMetric.allCases.filter { !selected.contains($0) }) { metric in row(metric) }
                 }
-                .toggleStyle(.switch).controlSize(.small)
                 Toggle("ラベルを表示（CPU、MEM、入、使など）", isOn: $labels)
                     .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                HStack(spacing: 12) {
+                    Text("値どうしの間隔").font(.system(size: 13)).frame(width: 110, alignment: .leading)
+                    Slider(value: $gap, in: 2...24, step: 1).accessibilityLabel("値どうしの間隔")
+                    Text("\(Int(gap)) pt").font(.system(size: 13, weight: .medium)).monospacedDigit().frame(width: 44, alignment: .trailing)
+                }
+                HStack(spacing: 12) {
+                    Text("更新の間隔").font(.system(size: 13)).frame(width: 110, alignment: .leading)
+                    Picker("更新の間隔", selection: $interval) {
+                        ForEach([2, 5, 10, 30], id: \.self) { Text("\($0)秒").tag($0) }
+                    }
+                    .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 260)
+                    .onChange(of: interval) { _, _ in
+                        if monitor.isRunning { monitor.stop(); monitor.start() }
+                    }
+                }
+                Text("間隔を長くすると、バッテリーと CPU の負荷が減ります。画面がスリープすると測定を止めます。").caption()
                 Text("デザイン").font(.system(size: 13, weight: .semibold))
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(MenuStyle.allCases) { option in preview(option) }
@@ -315,12 +405,32 @@ struct MenuMetricsCard: View {
         }
     }
 
+    private func row(_ metric: MenuMetric) -> some View {
+        HStack(spacing: 6) {
+            Toggle(metric.title, isOn: binding(metric)).font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+            Spacer()
+            if selected.contains(metric) {
+                arrow("chevron.up", "\(metric.title) を前へ", metric, by: -1)
+                arrow("chevron.down", "\(metric.title) を後ろへ", metric, by: 1)
+            }
+        }
+    }
+
+    private func arrow(_ symbol: String, _ label: String, _ metric: MenuMetric, by offset: Int) -> some View {
+        Button { save(MenuMetric.moved(metric, by: offset, in: selected) ?? selected) } label: {
+            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).frame(width: 26, height: 22).contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(MenuMetric.moved(metric, by: offset, in: selected) == nil)
+        .accessibilityLabel(label)
+    }
+
     private func preview(_ option: MenuStyle) -> some View {
         Button { style = option.rawValue } label: {
             HStack(spacing: 10) {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
-                Text(option.title).font(.system(size: 13)).frame(width: 64, alignment: .leading)
-                Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: option, labels: labels, status: monitor.status, power: monitor.power))
+                Text(option.title).font(.system(size: 13)).frame(width: 84, alignment: .leading)
+                Image(nsImage: MenuMetric.image(selected, style: option, labels: labels, gap: gap, status: monitor.status, power: monitor.power))
                     .renderingMode(.template)
                 Spacer(minLength: 0)
             }
@@ -332,14 +442,16 @@ struct MenuMetricsCard: View {
         .accessibilityLabel("デザイン: \(option.title)")
     }
 
+    private func save(_ metrics: [MenuMetric]) {
+        stored = metrics.map(\.rawValue).joined(separator: ",")
+        if metrics.isEmpty { monitor.release("menubar") } else { monitor.acquire("menubar") }
+    }
+
     private func binding(_ metric: MenuMetric) -> Binding<Bool> {
         Binding {
-            MenuMetric.selected(stored).contains(metric)
+            selected.contains(metric)
         } set: { on in
-            var chosen = MenuMetric.selected(stored).filter { $0 != metric }
-            if on { chosen.append(metric) }
-            stored = chosen.map(\.rawValue).joined(separator: ",")
-            if chosen.isEmpty { monitor.release("menubar") } else { monitor.acquire("menubar") }
+            save(selected.filter { $0 != metric } + (on ? [metric] : []))
         }
     }
 }
