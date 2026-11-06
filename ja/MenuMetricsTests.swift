@@ -217,6 +217,12 @@ struct MenuMetricsTests {
         #expect(padded == plain + 8)
     }
 
+    @Test func onlyThirdPartyAppsCanBeHidden() {
+        #expect(MenuHider.listable("com.tinyspeck.slackmacgap", own: "me"))
+        #expect(!MenuHider.listable("com.apple.controlcenter", own: "me"))
+        #expect(!MenuHider.listable("me", own: "me"))
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)

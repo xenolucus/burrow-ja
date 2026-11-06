@@ -87,24 +87,67 @@ final class MenuHider: ObservableObject {
     /// macOS only allows the private call for apps in /Applications.
     static var installedInApplications: Bool { Bundle.main.bundlePath.hasPrefix("/Applications/") }
 
-    struct App: Identifiable {
+    struct App: Identifiable, Equatable {
         let id: String
         let name: String
         let icon: NSImage
     }
 
-    var runningApps: [App] {
-        let own = Bundle.main.bundleIdentifier
-        var seen = Set<String>()
-        return NSWorkspace.shared.runningApplications.compactMap { app -> App? in
-            guard app.activationPolicy != .prohibited, let id = app.bundleIdentifier, id != own,
-                  seen.insert(id).inserted else { return nil }
-            return App(id: id, name: app.localizedName ?? id, icon: app.icon ?? NSImage())
-        }
-        .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    /// Apps that can be hidden: those with a menu bar item, in name order.
+    @Published private(set) var shownApps: [App] = []
+    @Published private(set) var hiddenApps: [App] = []
+    /// Without Accessibility the list falls back to every third-party app.
+    @Published private(set) var canSeeMenuBar = AXIsProcessTrusted()
+
+    /// macOS's own items are not apps' to hide, and hiding them is the private call's business.
+    nonisolated static func listable(_ id: String, own: String?) -> Bool {
+        id != own && !id.hasPrefix("com.apple.")
     }
 
-    var hiddenApps: [App] { runningApps.filter { hidden.contains($0.id) } }
+    /// Asks the app itself, because `MenuBarAgent` lists only what is on screen right now.
+    private nonisolated static func hasMenuBarItem(pid: pid_t) -> Bool {
+        let app = AXUIElementCreateApplication(pid)
+        AXUIElementSetMessagingTimeout(app, 0.2)
+        var bar: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(app, "AXExtrasMenuBar" as CFString, &bar) == .success,
+              let bar, CFGetTypeID(bar) == AXUIElementGetTypeID() else { return false }
+        var count: CFIndex = 0
+        AXUIElementGetAttributeValueCount(bar as! AXUIElement, kAXChildrenAttribute as CFString, &count)
+        return count > 0
+    }
+
+    func askForAccessibility() {
+        canSeeMenuBar = AXIsProcessTrustedWithOptions(["AXTrustedCheckOptionPrompt": true] as CFDictionary)
+    }
+
+    private func app(_ running: NSRunningApplication?, id: String) -> App {
+        let url = running?.bundleURL ?? NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+        let name = running?.localizedName ?? url.map { FileManager.default.displayName(atPath: $0.path) } ?? id
+        return App(id: id, name: name, icon: url.map { NSWorkspace.shared.icon(forFile: $0.path) } ?? NSWorkspace.shared.icon(for: .applicationBundle))
+    }
+
+    private func sorted(_ apps: [App]) -> [App] {
+        apps.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    /// Off the main thread: each ask is an IPC that waits for the app.
+    func refreshApps() {
+        canSeeMenuBar = AXIsProcessTrusted()
+        let own = Bundle.main.bundleIdentifier, trusted = canSeeMenuBar
+        var seen = Set<String>()
+        let running = NSWorkspace.shared.runningApplications.filter { app in
+            app.activationPolicy != .prohibited && app.bundleIdentifier.map { Self.listable($0, own: own) && seen.insert($0).inserted } == true
+        }
+        let candidates = running.map { ($0.bundleIdentifier ?? "", $0.processIdentifier) }
+        Task {
+            let found = await Task.detached(priority: .userInitiated) {
+                Set(candidates.filter { !trusted || Self.hasMenuBarItem(pid: $0.1) }.map(\.0))
+            }.value
+            shownApps = sorted(running.filter { found.contains($0.bundleIdentifier ?? "") && !hidden.contains($0.bundleIdentifier ?? "") }
+                .map { app($0, id: $0.bundleIdentifier ?? "") })
+            hiddenApps = sorted(hidden.map { id in app(running.first { $0.bundleIdentifier == id }, id: id) })
+        }
+    }
 
     func start() {
         guard enabled else { return }
@@ -112,6 +155,7 @@ final class MenuHider: ObservableObject {
             problem = "macOS 27 以降で、/Applications から起動したときだけ使えます。"
             return
         }
+        refreshApps()
         do {
             restriction = try restriction ?? MenuBarRestriction()
             watchApps()
@@ -132,6 +176,7 @@ final class MenuHider: ObservableObject {
         if on { hidden.insert(id) } else { hidden.remove(id) }
         UserDefaults.standard.set(hidden.sorted(), forKey: Self.hiddenKey)
         apply()
+        refreshApps()
     }
 
     /// Shows the real items for a moment, then hides them again by itself.
@@ -164,7 +209,10 @@ final class MenuHider: ObservableObject {
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                MainActor.assumeIsolated { self?.apply() }
+                MainActor.assumeIsolated {
+                    self?.apply()
+                    self?.refreshApps()
+                }
             }
         }
     }
@@ -196,6 +244,29 @@ struct HiddenAppsRow: View {
 struct MenuHideCard: View {
     @ObservedObject private var hider = MenuHider.shared
 
+    private func section(_ title: String, _ apps: [MenuHider.App], action: String, empty: String,
+                         run: @escaping (String) -> Void) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("\(title)（\(apps.count)）").font(.system(size: 13, weight: .semibold))
+            if apps.isEmpty { Text(empty).caption() }
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 6) {
+                ForEach(apps) { app in
+                    Button { run(app.id) } label: {
+                        HStack(spacing: 6) {
+                            Image(nsImage: app.icon).resizable().frame(width: 16, height: 16)
+                            Text(app.name).font(.system(size: 13)).lineLimit(1)
+                            Spacer(minLength: 4)
+                            Text(action).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                        }
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("\(app.name) を\(action)")
+                }
+            }
+        }
+    }
+
     var body: some View {
         GlowCard(glow: .ember, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 12) {
@@ -210,19 +281,20 @@ struct MenuHideCard: View {
                     Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
                 }
                 if hider.enabled {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), alignment: .leading)], alignment: .leading, spacing: 8) {
-                        ForEach(hider.runningApps) { app in
-                            Toggle(isOn: Binding { hider.hidden.contains(app.id) } set: { hider.setHidden(app.id, $0) }) {
-                                HStack(spacing: 6) {
-                                    Image(nsImage: app.icon).resizable().frame(width: 16, height: 16)
-                                    Text(app.name).font(.system(size: 13)).lineLimit(1)
-                                }
-                            }
-                            .toggleStyle(.checkbox)
+                    if !hider.canSeeMenuBar {
+                        HStack {
+                            Text("アクセシビリティを許可すると、メニューバーに項目があるアプリだけを表示します。").caption()
+                            Spacer()
+                            Button("許可する") { hider.askForAccessibility() }.buttonStyle(.pillSecondary)
                         }
                     }
+                    section("非表示中", hider.hiddenApps, action: "戻す", empty: "まだありません。") { hider.setHidden($0, false) }
+                    section("表示中", hider.shownApps, action: "隠す", empty: "隠せるアプリは見つかりませんでした。") { hider.setHidden($0, true) }
+                    Text("macOS の項目（Wi-Fi、コントロールセンターなど）は対象外です。").caption()
                 }
             }
         }
+        .onAppear { hider.refreshApps() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in hider.refreshApps() }
     }
 }
