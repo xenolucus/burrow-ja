@@ -125,6 +125,18 @@ struct MenuMetricsTests {
         #expect(rows.count == 1 && rows[0].runs == 2)
     }
 
+    @Test func safeCachesStartSelected() {
+        let found: [ExternalCache] = [
+            .init(path: "/Volumes/SSD/Adobe/Media Cache", kind: "", bytes: 1),
+            .init(path: "/Volumes/SSD/.adobeTemp", kind: "", bytes: 1),
+            .init(path: "/Volumes/SSD/Game/Library", kind: "", bytes: 1),
+            .init(path: "/Volumes/SSD", kind: "", bytes: 1, byMole: true),
+        ]
+        #expect(ExternalCache.preselected(found, adobeRunning: false)
+                == ["/Volumes/SSD/Adobe/Media Cache", "/Volumes/SSD/.adobeTemp", "/Volumes/SSD"])
+        #expect(!ExternalCache.preselected(found, adobeRunning: true).contains("/Volumes/SSD/.adobeTemp"))
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)

@@ -35,6 +35,15 @@ struct ExternalCache: Identifiable, Hashable {
     var byMole = false
     var id: String { path }
 
+    /// Everything starts selected, like the main Clean page, except what costs time or is in use:
+    /// Unity reimports a whole project, and a running Adobe app is using .adobeTemp.
+    static func preselected(_ found: [ExternalCache], adobeRunning: Bool) -> Set<String> {
+        Set(found.filter { cache in
+            let name = (cache.path as NSString).lastPathComponent
+            return !(name == "Library" || (adobeRunning && name == ".adobeTemp"))
+        }.map(\.path))
+    }
+
     static func split(_ chosen: [ExternalCache]) -> (trash: [String], mole: [String]) {
         (chosen.filter { !$0.byMole }.map(\.path), chosen.filter(\.byMole).map(\.path))
     }
@@ -113,7 +122,7 @@ struct ExternalCleanCard: View {
             GlowCard(glow: .ember, style: .rim, padding: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("外付けドライブ（試験的）").cardTitle()
-                    Text("アプリのキャッシュと、Mac が作る .DS_Store などを探します。選んだものだけ整理します。自分のファイルとゴミ箱には触れません。").caption()
+                    Text("「プレビュー」で内容を確認して「今すぐクリーン」を押します。アプリのキャッシュと、Mac が作る .DS_Store などが対象です。自分のファイルとゴミ箱には触れません。").caption()
                     if ExternalDrives.finderMetadataProtected {
                         Text("保護パスに FINDER_METADATA があるため、.DS_Store などはほとんど見つかりません。").caption()
                     }
@@ -165,8 +174,8 @@ struct ExternalCleanCard: View {
         if failed > 0 {
             Text("\(failed) 項目をゴミ箱に入れられませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
         }
-        if !caches.isEmpty, selected.isEmpty {
-            Text("消すものを選ぶと「今すぐクリーン」を押せます。").caption()
+        if !caches.isEmpty {
+            Text("チェックを外した項目は残します。").caption()
         }
     }
 
@@ -193,6 +202,8 @@ struct ExternalCleanCard: View {
                     found.append(.init(path: drive.path, kind: "Mac の不要ファイル（.DS_Store など）", bytes: bytes, byMole: true))
                 }
             }
+            let adobeRunning = NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier?.hasPrefix("com.adobe.") == true }
+            selected = ExternalCache.preselected(found, adobeRunning: adobeRunning)
             caches = found
             scanning = nil
         }
