@@ -297,6 +297,9 @@ T = {
     q("Slim apps", "スリム化する"), q("Slimming apps", "アプリをスリム化しています"),
 ],
 "Features/Tray.swift": [
+    # .preferredColorScheme does not reach a menu bar window, so light mode left text black on the dark card.
+    R('        .preferredColorScheme(.dark)\n        .onAppear { monitor.acquire("tray") }',
+      '        .environment(\\.colorScheme, .dark)\n        .foregroundStyle(.white)\n        .preferredColorScheme(.dark)\n        .onAppear { monitor.acquire("tray") }'),
     R('                    Button("Settings…") { open(.settings) }\n', '                    Button("アップデートを確認…") { AppUpdates.check() }\n                    Button("Settings…") { open(.settings) }\n'),
     R("""            HStack(spacing: 10) {
                 vital("CPU",""", """            PowerRow(monitor: monitor)
