@@ -34,6 +34,10 @@ enum ExternalCacheScanner {
         switch name {
         case "Media Cache Files", "Media Cache": "Adobe メディアキャッシュ"
         case "Peak Files": "Adobe の音声波形"
+        case "Adobe Premiere Pro Video Previews": "Premiere Pro のビデオプレビュー"
+        case "Adobe Premiere Pro Audio Previews": "Premiere Pro のオーディオプレビュー"
+        case _ where name.hasPrefix("Disk Cache - ") || name.hasPrefix("Adobe After Effects Disk Cache"):
+            "After Effects のディスクキャッシュ"
         case "DerivedData": "Xcode のビルドデータ"
         case "shadercache" where parent == "steamapps": "Steam のシェーダーキャッシュ"
         case "Library" where siblings.isSuperset(of: ["Assets", "ProjectSettings"]): "Unity のプロジェクトキャッシュ"
@@ -43,14 +47,19 @@ enum ExternalCacheScanner {
 
     /// Stays on the volume, below `depth`, and outside packages and hidden folders.
     /// shortcut: stops after `limit` seconds, a huge drive shows only what was found by then.
-    static func scan(_ root: URL, depth: Int = 8, limit: TimeInterval = 30) -> [ExternalCache] {
+    static func scan(_ root: URL, depth: Int = 8, limit: TimeInterval = 30, minBytes: Int64 = 1_000_000) -> [ExternalCache] {
         let fm = FileManager.default
         let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey]
         guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: keys,
                                          options: [.skipsHiddenFiles, .skipsPackageDescendants],
                                          errorHandler: { _, _ in true }) else { return [] }
         let started = Date()
-        var found: [ExternalCache] = []
+        var matches: [(URL, String)] = []
+        // Hidden, so the walker skips it. Adobe only creates it at the top of a volume.
+        let adobeTemp = root.appendingPathComponent(".adobeTemp")
+        if (try? adobeTemp.resourceValues(forKeys: Set(keys)))?.isDirectory == true {
+            matches.append((adobeTemp, "Adobe の一時ファイル（Adobe アプリを閉じてから）"))
+        }
         for case let url as URL in walker {
             if Date().timeIntervalSince(started) > limit { break }
             let values = try? url.resourceValues(forKeys: Set(keys))
@@ -61,10 +70,13 @@ enum ExternalCacheScanner {
             let siblings = needsSiblings ? Set((try? fm.contentsOfDirectory(atPath: parent.path)) ?? []) : []
             if let kind = kind(name: url.lastPathComponent, parent: parent.lastPathComponent, siblings: siblings) {
                 walker.skipDescendants()
-                found.append(.init(path: url.path, kind: kind, bytes: FolderSize.of(url.path)))
+                matches.append((url, kind))
             }
         }
-        return found.sorted { $0.bytes > $1.bytes }
+        // Measured after the walk, so a huge cache cannot use up the time limit. Empty previews are noise.
+        return matches.map { ExternalCache(path: $0.0.path, kind: $0.1, bytes: FolderSize.of($0.0.path)) }
+            .filter { $0.bytes >= minBytes }
+            .sorted { $0.bytes > $1.bytes }
     }
 }
 

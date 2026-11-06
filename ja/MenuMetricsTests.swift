@@ -67,6 +67,12 @@ struct MenuMetricsTests {
         #expect(ExternalCacheScanner.kind(name: "Library", parent: "Game", siblings: ["Assets", "ProjectSettings"]) != nil)
         #expect(ExternalCacheScanner.kind(name: "Library", parent: "Photos", siblings: ["Assets"]) == nil)
         #expect(ExternalCacheScanner.kind(name: "Documents", parent: "Work", siblings: []) == nil)
+        #expect(ExternalCacheScanner.kind(name: "Disk Cache - MacBook Pro", parent: "25.5", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "Adobe After Effects Disk Cache - Mac", parent: "Cache", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "Adobe Premiere Pro Video Previews", parent: "Project", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "Adobe Premiere Pro Audio Previews", parent: "Project", siblings: []) != nil)
+        #expect(ExternalCacheScanner.kind(name: "Adobe Premiere Pro Auto-Save", parent: "Project", siblings: []) == nil)
+        #expect(ExternalCacheScanner.kind(name: "Disk Cache", parent: "Work", siblings: []) == nil)
     }
 
     @Test func scanFindsOnlyKnownFoldersAndSkipsLinks() throws {
@@ -78,8 +84,22 @@ struct MenuMetricsTests {
         try Data(count: 4096).write(to: cache.appendingPathComponent("a.bin"))
         try fm.createDirectory(at: root.appendingPathComponent("Movies/Project"), withIntermediateDirectories: true)
         try fm.createSymbolicLink(at: root.appendingPathComponent("Peak Files"), withDestinationURL: cache)
-        let found = ExternalCacheScanner.scan(root)
+        let found = ExternalCacheScanner.scan(root, minBytes: 1)
         #expect(found.map(\.path.lastPathComponentName) == ["Media Cache Files"])
+    }
+
+    @Test func adobeTempCountsOnlyAtTheVolumeTop() throws {
+        let fm = FileManager.default
+        let root = fm.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? fm.removeItem(at: root) }
+        for folder in [".adobeTemp", "Work/.adobeTemp", "Project/Adobe Premiere Pro Audio Previews"] {
+            try fm.createDirectory(at: root.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        try Data(count: 4096).write(to: root.appendingPathComponent(".adobeTemp/a.tmp"))
+        try Data(count: 4096).write(to: root.appendingPathComponent("Work/.adobeTemp/a.tmp"))
+        let found = ExternalCacheScanner.scan(root, minBytes: 1)
+        #expect(found.map(\.path.lastPathComponentName) == [".adobeTemp"])
+        #expect(ExternalCacheScanner.scan(root, minBytes: 1_000_000).isEmpty)
     }
 
     @Test func keepsOnlyKnownMetrics() {
