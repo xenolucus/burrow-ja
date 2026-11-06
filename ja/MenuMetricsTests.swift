@@ -153,6 +153,25 @@ struct MenuMetricsTests {
         #expect(fm.fileExists(atPath: outside.path) && (try? fm.destinationOfSymbolicLink(atPath: link.path)) != nil)
     }
 
+    @Test func parsesDriveInfo() throws {
+        let plist: [String: Any] = ["MediaName": "SSD", "BusProtocol": "USB", "FilesystemUserVisibleName": "APFS",
+                                    "SMARTStatus": "Not Supported", "TotalSize": 1000, "APFSContainerFree": 400]
+        let data = try PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
+        let info = try #require(DriveInfo.parse(data))
+        #expect(info.model == "SSD" && info.free == 400 && info.total == 1000)
+        #expect(info.health == "このドライブでは取得できません")
+        #expect(DriveInfo.parse(Data("x".utf8)) == nil)
+    }
+
+    @Test func oldVideoRule() {
+        let now = Date(timeIntervalSince1970: 2_000_000_000)
+        let old = now.addingTimeInterval(-OldVideoScanner.idle - 1)
+        #expect(OldVideoScanner.isOld(path: "/V/a.MOV", bytes: OldVideoScanner.minBytes, lastUsed: old, now: now))
+        #expect(!OldVideoScanner.isOld(path: "/V/a.mov", bytes: OldVideoScanner.minBytes - 1, lastUsed: old, now: now))
+        #expect(!OldVideoScanner.isOld(path: "/V/a.mov", bytes: OldVideoScanner.minBytes, lastUsed: now, now: now))
+        #expect(!OldVideoScanner.isOld(path: "/V/a.psd", bytes: OldVideoScanner.minBytes, lastUsed: old, now: now))
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)

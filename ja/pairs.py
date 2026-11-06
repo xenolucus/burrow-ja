@@ -19,7 +19,11 @@ PLACES = "ダウンロード、デスクトップ、メール、Telegram"
 T = {
 "AppModel.swift": [
     R('case overview, clean, uninstall, optimize, analyze, projects, installers, slim, history, settings',
-      'case overview, clean, uninstall, optimize, analyze, projects, installers, slim, history, totals, settings'),
+      'case overview, clean, uninstall, optimize, analyze, projects, installers, slim, drives, history, totals, settings'),
+    R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n'),
+    R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n'),
+    R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives: .blue'),
+    R('        case .slim: "Drop the Intel half of universal apps"\n', '        case .slim: "Drop the Intel half of universal apps"\n        case .drives: "外付けドライブの状態と古い動画"\n'),
     R('        case .history: "History"\n', '        case .history: "History"\n        case .totals: "累計"\n'),
     R('        case .history: "clock.arrow.circlepath"\n', '        case .history: "clock.arrow.circlepath"\n        case .totals: "chart.bar.fill"\n'),
     R('case .overview, .history: .violet', 'case .overview, .history, .totals: .violet'),
@@ -332,7 +336,7 @@ T = {
     q("Uninstalling", "アンインストールしています"), q("Size unknown", "サイズ不明"), q("Show in Finder", "Finder で表示"), q("Search (⌘F)", "検索（⌘F）"),
 ],
 "RootView.swift": [
-    R('        case .history: HistoryPage()\n', '        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
+    R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
     # "アンインストール" wraps once the row shows its status dot.
     R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
     R('Text("Burrow").font(.system(size: 17', 'Text("Burrow JA").font(.system(size: 17'),
