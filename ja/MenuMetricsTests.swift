@@ -111,6 +111,20 @@ struct MenuMetricsTests {
         #expect(plan.mole == ["/Volumes/SSD"])
     }
 
+    @Test func totalsCountRealRunsOnce() throws {
+        let json = #"""
+        [{"command":"clean","started_at":"2026-11-05 13:10:00","size":"13.52GB","items":754},
+         {"command":"clean-dry-run","started_at":"2026-11-05 13:11:00","size":"5GB","items":9},
+         {"command":"uninstall","started_at":"2026-11-05 13:12:00","size":"0B","items":0}]
+        """#
+        let sessions = try JSONDecoder().decode([HistoryResult.Session].self, from: Data(json.utf8))
+        let first = TotalsStore.merged([], with: sessions)
+        #expect(first.map(\.kind) == ["clean"])
+        #expect(TotalsStore.merged(first, with: sessions).count == 1)
+        let rows = TotalsStore.breakdown(first + [.init(id: "x", kind: "clean", bytes: 1, date: Date())])
+        #expect(rows.count == 1 && rows[0].runs == 2)
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)

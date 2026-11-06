@@ -208,6 +208,7 @@ struct ExternalCleanCard: View {
         confirm = .init(title: "\(chosen.count) 項目をクリーンしますか？", message: message, button: "クリーン") {
             let left = Trash.move(plan.trash)
             failed = left.count
+            TotalsStore.addExternal(bytes: chosen.filter { plan.trash.contains($0.path) && !left.contains($0.path) }.map(\.bytes).reduce(0, +))
             caches = caches?.filter { !selected.contains($0.path) || left.contains($0.path) }
             selected = []
             if let volume = plan.mole.first {
