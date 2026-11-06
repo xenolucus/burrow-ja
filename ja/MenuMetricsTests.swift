@@ -285,6 +285,23 @@ struct MenuMetricsTests {
         #expect(ManualGuide.all["Docker Desktop data"]?.command == "docker system prune -a")
     }
 
+    @Test func duplicateChoicesKeepAtLeastOneCopy() {
+        func file(_ path: String, age: TimeInterval = 0) -> DuplicateFile {
+            DuplicateFile(path: path, bytes: 10, modified: Date(timeIntervalSince1970: 1000 - age))
+        }
+        let mixed = DuplicateGroup(files: [file("/h/Downloads/a"), file("/h/Docs/a")])
+        let onlyDownloads = DuplicateGroup(files: [file("/h/Downloads/b"), file("/h/Downloads/sub/b (1)", age: 5)])
+        let elsewhere = DuplicateGroup(files: [file("/h/Docs/c"), file("/h/Work/c")])
+        let more = DuplicateGroup(files: [file("/h/Docs/d"), file("/h/Docs/d2", age: 5), file("/h/Work/d")])
+        let single = DuplicateGroup(files: [file("/h/X/e"), file("/h/Y/e")])
+        let all = [mixed, onlyDownloads, elsewhere, more, single]
+        #expect(DuplicateFinder.downloadsRule(all, home: "/h") == ["/h/Downloads/a", "/h/Downloads/sub/b (1)"])
+        let sets = DuplicateFinder.folderSets(all, home: "/h")
+        #expect(sets.count == 1 && sets[0].folders == ["/h/Docs", "/h/Work"] && sets[0].groups.count == 2)
+        #expect(DuplicateFinder.keeping("/h/Docs", in: sets[0]) == ["/h/Work/c", "/h/Docs/d2", "/h/Work/d"])
+        #expect(DuplicateFinder.keeping("/h/Work", in: sets[0]) == ["/h/Docs/c", "/h/Docs/d", "/h/Docs/d2"])
+    }
+
     @Test func duplicatesCompareContentAndAlwaysKeepOneCopy() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
