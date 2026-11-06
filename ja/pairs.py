@@ -94,7 +94,7 @@ T = {
 ],
 "Features/CleanPage.swift": [
     R("""            if let report {
-                Notes(notes: report.notes.filter""", """            ExternalCleanCard(model: model)
+                Notes(notes: report.notes.filter""", """            ExternalCleanCard(model: model, confirm: $confirm)
 
             if let report {
                 Notes(notes: report.notes.filter"""),

@@ -7,6 +7,12 @@ import SwiftUI
 enum ExternalDrives {
     static let enabledKey = "experimentalExternalClean"
 
+    /// Mole then keeps .DS_Store and ._ files, so its external clean finds almost nothing.
+    static var finderMetadataProtected: Bool {
+        let file = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".config/mole/whitelist")
+        return (try? String(contentsOf: file, encoding: .utf8))?.contains("FINDER_METADATA") ?? false
+    }
+
     static func isCandidate(path: String, isInternal: Bool?) -> Bool {
         let parts = path.split(separator: "/")
         return isInternal == false && parts.count == 2 && parts[0] == "Volumes"
@@ -82,9 +88,10 @@ enum ExternalCacheScanner {
 
 struct ExternalCleanCard: View {
     let model: AppModel
+    /// The page's alert: a second `.alert` inside it never appears.
+    @Binding var confirm: ConfirmAction?
     @AppStorage(ExternalDrives.enabledKey) private var enabled = false
     @ViewState private var drives: [URL] = []
-    @ViewState private var confirm: ConfirmAction?
     @ViewState private var scanning: URL?
     @ViewState private var caches: [ExternalCache]?
     @ViewState private var selected = Set<String>()
@@ -98,7 +105,10 @@ struct ExternalCleanCard: View {
             GlowCard(glow: .ember, style: .rim, padding: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("外付けドライブ（試験的）").cardTitle()
-                    Text("「不要ファイル」は .DS_Store などを削除します。「キャッシュを探す」は既知のキャッシュを一覧にします。自分のファイルとゴミ箱には触れません。").caption()
+                    Text("「キャッシュを探す」はアプリのキャッシュを一覧にします。「不要ファイルを削除」は Mac が作る .DS_Store などを Mole が削除します。自分のファイルとゴミ箱には触れません。").caption()
+                    if ExternalDrives.finderMetadataProtected {
+                        Text("保護パスに FINDER_METADATA があるため、不要ファイルはほとんど見つかりません。").caption()
+                    }
                     if drives.isEmpty {
                         Text("外付けドライブは接続されていません。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
                     }
@@ -120,7 +130,6 @@ struct ExternalCleanCard: View {
             .onAppear { drives = ExternalDrives.mounted() }
             .onReceive(mounts) { _ in drives = ExternalDrives.mounted() }
             .onReceive(unmounts) { _ in drives = ExternalDrives.mounted(); caches = nil; selected = [] }
-            .confirmation($confirm)
         }
     }
 
