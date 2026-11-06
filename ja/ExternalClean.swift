@@ -240,20 +240,20 @@ struct ExternalCleanCard: View {
     }
 }
 
+/// Every experimental feature is switched on here and nowhere else.
 struct ExperimentalCard: View {
-    @AppStorage(ExternalDrives.enabledKey) private var enabled = false
+    @AppStorage(ExternalDrives.enabledKey) private var external = false
+    @ObservedObject private var hider = MenuHider.shared
 
     var body: some View {
         GlowCard(glow: .ember, style: .rim, padding: 22) {
-            HStack(spacing: 24) {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text("試験的な機能").cardTitle()
-                    Text("外付け SSD や HDD の不要ファイルとキャッシュを整理します。予告なく変更する場合があります。").caption()
-                }
-                Spacer()
-                Toggle("外付けドライブのクリーン", isOn: $enabled)
-                    .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+            VStack(alignment: .leading, spacing: 10) {
+                Text("試験的な機能").cardTitle()
+                Text("予告なく変更する場合があります。").caption()
+                Toggle("外付けドライブのクリーン", isOn: $external)
+                Toggle("メニューバー項目のまとめ", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
             }
+            .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
         }
     }
 }

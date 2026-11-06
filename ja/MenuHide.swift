@@ -48,15 +48,24 @@ final class MenuGroupBar: NSObject {
             // Wider than a square, because a tight system spacing otherwise joins it to the next item.
             let item = items[group.id] ?? NSStatusBar.system.statusItem(withLength: 32)
             items[group.id] = item
-            item.button?.image = NSImage(systemSymbolName: group.symbol, accessibilityDescription: group.name)
+            let open = expanded.contains(group.id)
+            let symbol = open ? NSImage(systemSymbolName: group.symbol + ".fill", accessibilityDescription: group.name) : nil
+            item.button?.image = symbol ?? NSImage(systemSymbolName: group.symbol, accessibilityDescription: group.name)
             item.button?.image?.isTemplate = true
             item.button?.toolTip = group.name
             item.button?.identifier = NSUserInterfaceItemIdentifier(group.id)
             item.button?.target = self
             item.button?.action = #selector(clicked)
             item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
-            item.button?.contentTintColor = expanded.contains(group.id) ? .controlAccentColor : nil
         }
+    }
+
+    /// The icon's frame in the top-left coordinates that events and Accessibility use.
+    func frame(of id: String) -> CGRect? {
+        guard let window = items[id]?.button?.window, let height = NSScreen.screens.first?.frame.height else { return nil }
+        var frame = window.frame
+        frame.origin.y = height - frame.maxY
+        return frame
     }
 
     /// A left click opens the group right in the menu bar; a right click lists it in a panel.
@@ -218,6 +227,7 @@ final class MenuHider: ObservableObject {
     /// Seconds an opened group stays open; 0 keeps it open until clicked again.
     static let collapseKey = "menuCollapseSeconds"
     static let defaultCollapse = 15
+    private static let arrangedKey = "menuArrangedApps"
     /// The hidden app let through for a moment, so its item can be pressed.
     private var passing: String?
     private var watching = false
@@ -371,10 +381,11 @@ final class MenuHider: ObservableObject {
         bar.sync(groups, expanded: expanded)
         apply()
         roomTask?.cancel()
-        if !expanded.isEmpty {
+        if expanded.contains(id) {
             roomTask = Task {
                 // MenuBarAgent animates the new layout for about a second before it folds anything.
                 try? await Task.sleep(for: .milliseconds(1200))
+                await arrange(id)
                 let folded = await Task.detached(priority: .userInitiated) { Self.menuBarOverflows() }.value
                 guard folded, !Task.isCancelled else { return }
                 makingRoom = true
@@ -457,6 +468,39 @@ final class MenuHider: ObservableObject {
             passing = nil
             apply()
         }
+    }
+
+    /// Moves a group's items beside its icon once, the way a person would with Command-drag:
+    /// only the system can place items, and it remembers where they were put.
+    private func arrange(_ id: String) async {
+        guard canSeeMenuBar, let group = groups.first(where: { $0.id == id }), let icon = bar.frame(of: id) else { return }
+        var done = Set(UserDefaults.standard.stringArray(forKey: Self.arrangedKey) ?? [])
+        for app in group.apps where !done.contains(app) {
+            let frame = await Task.detached(priority: .userInitiated) { Self.itemFrame(of: app) }.value
+            guard let frame else { continue }
+            if frame.midX > icon.minX || icon.minX - frame.maxX > 4 {
+                Self.commandDrag(from: CGPoint(x: frame.midX, y: frame.midY), to: CGPoint(x: icon.minX - 2, y: icon.midY))
+                try? await Task.sleep(for: .milliseconds(350))
+            }
+            done.insert(app)
+        }
+        UserDefaults.standard.set(done.sorted(), forKey: Self.arrangedKey)
+    }
+
+    private static func commandDrag(from start: CGPoint, to end: CGPoint) {
+        let pointer = CGEvent(source: nil)?.location
+        func post(_ type: CGEventType, _ point: CGPoint) {
+            let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
+            event?.flags = .maskCommand
+            event?.post(tap: .cghidEventTap)
+            usleep(30_000)
+        }
+        post(.mouseMoved, start)
+        post(.leftMouseDown, start)
+        post(.leftMouseDragged, CGPoint(x: (start.x + end.x) / 2, y: end.y))
+        post(.leftMouseDragged, end)
+        post(.leftMouseUp, end)
+        if let pointer { CGWarpMouseCursorPosition(pointer) }
     }
 
     /// macOS draws a « button in a childless slot when items no longer fit.
@@ -674,17 +718,12 @@ struct MenuHideCard: View {
     var body: some View {
         GlowCard(glow: .ember, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 12) {
-                HStack {
-                    Text("メニューバー項目をまとめる（試験的）").cardTitle()
-                    Spacer()
-                    Toggle("オン", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
-                        .labelsHidden().toggleStyle(.switch).controlSize(.small)
-                }
+                Text("メニューバー項目のまとめ（試験的）").cardTitle()
                 Text("アイコンを押すと、まとめたアプリがメニューバーに出ます。もう一度押すと隠れます。右クリックで一覧を開きます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
                 if let problem = hider.problem {
                     Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
                 }
-                if hider.enabled {
+                do {
                     if !hider.canSeeMenuBar {
                         HStack {
                             Text("アクセシビリティを許可すると、メニューバーに項目があるアプリだけを表示します。").caption()
