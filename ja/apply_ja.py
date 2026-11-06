@@ -130,6 +130,7 @@ def main():
     shutil.copy2(KIT / "MenuBarPage.swift", sources / "MenuBarPage.swift")
     shutil.copy2(KIT / "Sidebar.swift", sources / "Sidebar.swift")
     shutil.copy2(KIT / "MaxClean.swift", sources / "MaxClean.swift")
+    shutil.copy2(KIT / "Remaining.swift", sources / "Remaining.swift")
     shutil.copy2(KIT / "LICENSE-Ellipsis.txt", OUT / "LICENSE-Ellipsis.txt")
     shutil.copy2(KIT / "MenuMetricsTests.swift", OUT / "Tests/BurrowTests/MenuMetricsTests.swift")
     write_notes()

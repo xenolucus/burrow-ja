@@ -228,6 +228,41 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func remainingReadsTheNewestRunOfEachKind() {
+        let log = """
+        [2026-11-06 09:00:00] [clean run=old] SKIPPED /h/Library/Caches/gone (protected)
+        [2026-11-06 10:00:00] [clean run=new] FAILED /h/.npm/_cacache/index-v5 (permission denied)
+        [2026-11-06 10:00:01] [clean run=new] REMOVED /h/Library/Caches/x
+        [2026-11-06 12:00:00] [clean-dry-run run=dry] SKIPPED /h/Library/Caches/a b (c) (protected)
+        """
+        let found = Remaining.parse(log)
+        #expect(Set(found.map(\.path)) == ["/h/.npm/_cacache/index-v5", "/h/Library/Caches/a b (c)"])
+    }
+
+    @Test func remainingOffersOnlyThirdPartyCaches() {
+        let home = "/h"
+        func top(_ path: String, _ reason: String = "protected") -> String? { Remaining.candidate(path, reason: reason, home: home)?.path }
+        #expect(top("/h/Library/Caches/com.spotify.client") == "/h/Library/Caches/com.spotify.client")
+        #expect(top("/h/Library/Logs/OneDrive") == "/h/Library/Logs/OneDrive")
+        #expect(top("/h/Library/Caches/notion.id/Cache.db", "live user cache") == "/h/Library/Caches/notion.id")
+        #expect(top("/h/Library/Containers/jp.naver.line.mac/Data/Library/Caches/WebKit", "live user cache")
+            == "/h/Library/Containers/jp.naver.line.mac/Data/Library/Caches")
+        #expect(top("/h/.npm/_cacache/content-v2", "permission denied") == "/h/.npm/_cacache/content-v2")
+        #expect(top("/h/Library/Caches/com.apple.akd") == nil)
+        #expect(top("/h/Library/Containers/com.apple.x/Data/Library/Caches/y", "live user cache") == nil)
+        #expect(top("/h/Library/Caches/CloudKit") == nil)
+        #expect(top("/h/Library/Logs/mole") == nil)
+        #expect(top("/h/Library/Caches/GeoServices/networkDefaults.plist") == nil)
+        #expect(top("/h/Library/Caches/foo", "whitelist") == nil)
+        #expect(top("/h/Library/Caches/foo", "active or unknown SQLite database") == nil)
+        #expect(top("/h/Library/Caches/foo/../../Mail") == nil)
+        #expect(top("/h/.npm/_cacache/content-v2") == nil)
+    }
+
+    @Test func remainingQuotesPathsForTheShell() {
+        #expect(Remaining.shellQuoted(["/h/a b", "/h/it's"]) == "'/h/a b' '/h/it'\\''s'")
+    }
+
     @Test func maxCleanLiftsOnlyReplaceableCachesAndRestoresThem() {
         let home = NSHomeDirectory()
         let saved = ["\(home)/Library/Caches/JetBrains*", "~/.gradle/caches/*", "~/Library/Mobile Documents*", "~/mine"]
