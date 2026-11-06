@@ -66,18 +66,37 @@ enum DiskAlert {
     }
 }
 
+/// The menu bar icon is the only way back to a closed window, so the Dock icon stays while that is off.
+enum DockIcon {
+    static let hiddenKey = "hideDockIcon"
+
+    static func policy(hidden: Bool, inMenuBar: Bool) -> NSApplication.ActivationPolicy {
+        hidden && inMenuBar ? .accessory : .regular
+    }
+
+    @MainActor static func apply() {
+        let defaults = UserDefaults.standard
+        NSApp.setActivationPolicy(policy(hidden: defaults.bool(forKey: hiddenKey), inMenuBar: defaults.bool(forKey: "showInMenuBar")))
+        // Changing the policy can send the window behind other apps.
+        NSApp.activate()
+        NSApp.burrowWindow?.makeKeyAndOrderFront(nil)
+    }
+}
+
 struct AlertsCard: View {
     @AppStorage(DiskAlert.lowKey) private var low = false
     @AppStorage(DiskAlert.lowGBKey) private var lowGB = DiskAlert.defaultLowGB
     @AppStorage(DiskAlert.checkDaysKey) private var checkDays = 0
     @AppStorage(DiskAlert.checkGBKey) private var checkGB = DiskAlert.defaultCheckGB
     @AppStorage(DiskAlert.skipCleanConfirmKey) private var skipConfirm = false
+    @AppStorage(DockIcon.hiddenKey) private var hideDock = false
+    @AppStorage("showInMenuBar") private var showInMenuBar = true
     @ViewState private var denied = false
 
     var body: some View {
         GlowCard(glow: .ember, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("通知と確認").cardTitle()
+                Text("通知と動作").cardTitle()
                 Toggle("空き容量が少ないときに通知", isOn: Binding { low } set: { on in
                     low = on
                     if on { ask() }
@@ -107,9 +126,13 @@ struct AlertsCard: View {
                 }
                 Toggle("クリーン前の確認を省略", isOn: $skipConfirm)
                 Text("「今すぐクリーン」を押すとすぐに始まります。「Mole が残した項目」の削除は常に確認します。").caption()
+                Toggle("Dock にアイコンを表示しない", isOn: $hideDock)
+                Text("アプリはメニューバーのアイコンから開きます。「メニューバーに表示」がオフの間は Dock に表示します。").caption()
             }
             .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
         }
+        .onChange(of: hideDock) { DockIcon.apply() }
+        .onChange(of: showInMenuBar) { DockIcon.apply() }
     }
 
     private func picker(_ title: String, selection: Binding<Int>, values: [Int]) -> some View {

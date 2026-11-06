@@ -61,6 +61,7 @@ T = {
     q("Protection rules, scan folders, Touch ID, deleted apps", "保護ルール、スキャン対象、Touch ID、削除済みアプリ"),
 ],
 "BurrowApp.swift": [
+    R('NSApp.setActivationPolicy(.regular)\n        NSApp.activate()', 'DockIcon.apply()'),
     R('                ForEach(Page.allCases) { page in\n                    Button(page.title)', '                ForEach(Page.current) { page in\n                    Button(page.title)'),
     q("Check for Updates…", "アップデートを確認…"),
     R('updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)',

@@ -228,6 +228,12 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func dockIconOnlyHidesWhileTheMenuBarIconCanReopenTheApp() {
+        #expect(DockIcon.policy(hidden: true, inMenuBar: true) == .accessory)
+        #expect(DockIcon.policy(hidden: true, inMenuBar: false) == .regular)
+        #expect(DockIcon.policy(hidden: false, inMenuBar: true) == .regular)
+    }
+
     @Test func alertsRepeatOnlyAfterTheirInterval() {
         let now = Date()
         #expect(DiskAlert.isDue(last: nil, every: 60, now: now))
