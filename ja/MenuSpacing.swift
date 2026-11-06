@@ -40,12 +40,33 @@ struct MenuSpacingCard: View {
                     .buttonStyle(.pillSecondary)
                     .disabled(spacing == nil && padding == nil)
                 }
-                Text("すべてのアプリの項目に効きます。").caption()
+                Text("すべてのアプリの項目に効きます。下の見本はスライダーに合わせて動きます。").caption()
+                preview
                 slider("項目の間隔", $spacing, key: MenuSpacing.spacingKey)
                 slider("クリック範囲の余白", $padding, key: MenuSpacing.paddingKey)
                 if changed { Text("反映するには、ログアウトしてログインし直してください。").caption() }
             }
         }
+    }
+
+    /// A drawn copy of the menu bar, because the real one only changes after logging in again.
+    private var preview: some View {
+        let gap = CGFloat(spacing ?? 16), inset = CGFloat(padding ?? 16)
+        let samples = ["calendar", "bolt.fill", "battery.75percent", "globe", "switch.2", "clock"]
+        return HStack(spacing: gap) {
+            Spacer(minLength: 0)
+            ForEach(Array(samples.enumerated()), id: \.offset) { index, symbol in
+                Image(systemName: symbol).font(.system(size: 14, weight: .medium))
+                    .frame(width: 22, height: 22)
+                    .padding(.horizontal, inset / 2)
+                    .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(index == 0 ? 0.2 : 0)))
+            }
+        }
+        .padding(.horizontal, 10)
+        .frame(height: 32)
+        .background(RoundedRectangle(cornerRadius: 8).fill(.white.opacity(0.08)))
+        .clipped()
+        .accessibilityLabel("メニューバーの見本。左端は選択中の範囲です。")
     }
 
     private func slider(_ title: String, _ value: Binding<Int?>, key: String) -> some View {
