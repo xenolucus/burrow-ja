@@ -35,6 +35,7 @@ T = {
                 status.acquire("menubar")
             }
             MenuMetric.pauseWhileScreensSleep(status)
+            MenuHider.shared.start()
             Task { _ = await TotalsStore.sync() }
 """),
     # Swift 6.2.3 cannot pick Task.init here, with or without translation.
@@ -266,7 +267,7 @@ T = {
     q("Will be removed", "削除予定"), q("In progress", "実行中"), q("Waiting", "待機中"), q("Failed", "失敗"),
 ],
 "Features/SettingsPage.swift": [
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ExperimentalCard()\n\n            MenuMetricsCard(monitor: model.status)\n\n            MenuSpacingCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            ExperimentalCard()\n\n            MenuHideCard()\n\n            MenuMetricsCard(monitor: model.status)\n\n            MenuSpacingCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),
@@ -310,6 +311,8 @@ T = {
     R('                    Button("Settings…") { open(.settings) }\n', '                    Button("アップデートを確認…") { AppUpdates.check() }\n                    Button("Settings…") { open(.settings) }\n'),
     R("""            HStack(spacing: 10) {
                 vital("CPU",""", """            PowerRow(monitor: monitor)
+
+            HiddenAppsRow()
 
             HStack(spacing: 10) {
                 vital("CPU","""),

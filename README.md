@@ -59,7 +59,7 @@ GitHub Actions が毎日、元の Burrow と Mole の更新を確認します。
 
 ## ライセンス
 
-GPL-3.0 です。元のプロジェクトと同じです。
+GPL-3.0 です。元のプロジェクトと同じです。項目を隠す処理は [Ellipsis](https://github.com/ronny/ellipsis)（Apache-2.0）をもとにしています（`ja/LICENSE-Ellipsis.txt`）。
 
 - Burrow © Khan Umirzakoff
 - Mole © tw93 and contributors

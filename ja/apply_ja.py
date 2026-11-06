@@ -71,6 +71,8 @@ def patch_bundle(text, public_key):
              "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
     text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
     text = replace_once(text, 'codesign --force --deep --sign - "$APP"\n', STABLE_SIGNING)
+    text = replace_once(text, 'cp LICENSE "$APP/Contents/Resources/LICENSE"\n',
+                        'cp LICENSE LICENSE-Ellipsis.txt "$APP/Contents/Resources/"\n')
     marker = 'cat > "$APP/Contents/Info.plist" <<PLIST'
     return replace_once(text, marker, 'mkdir -p "$APP/Contents/Resources/ja.lproj"\n' + marker)
 
@@ -122,6 +124,8 @@ def main():
     shutil.copy2(KIT / "TotalsPage.swift", sources / "TotalsPage.swift")
     shutil.copy2(KIT / "DrivesPage.swift", sources / "DrivesPage.swift")
     shutil.copy2(KIT / "MenuSpacing.swift", sources / "MenuSpacing.swift")
+    shutil.copy2(KIT / "MenuHide.swift", sources / "MenuHide.swift")
+    shutil.copy2(KIT / "LICENSE-Ellipsis.txt", OUT / "LICENSE-Ellipsis.txt")
     shutil.copy2(KIT / "MenuMetricsTests.swift", OUT / "Tests/BurrowTests/MenuMetricsTests.swift")
     write_notes()
     table = json.loads((KIT / "mole_strings.json").read_text(encoding="utf-8"))

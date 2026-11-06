@@ -193,6 +193,13 @@ struct MenuMetricsTests {
         }
     }
 
+    @Test func hideListAllowsEverythingElse() {
+        let list = HideList.make(running: ["a", "b", "self"], hidden: ["b", "quit"])
+        #expect(list.allowed == ["a", "self"])
+        #expect(list == HideList.make(running: ["self", "b", "a"], hidden: ["quit", "b"]))
+        #expect(list != HideList.make(running: ["a", "b", "c", "self"], hidden: ["b", "quit"]))
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)
