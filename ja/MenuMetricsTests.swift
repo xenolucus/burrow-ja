@@ -187,7 +187,7 @@ struct MenuMetricsTests {
         let s = try status(#"{"cpu":{"usage":18.4},"memory":{"used":1,"total":2,"used_percent":61.6},"network":[{"name":"en0","rx_rate_mbs":1,"tx_rate_mbs":0}]}"#)
         for style in MenuStyle.allCases {
             for labels in [true, false] {
-                let image = MenuMetric.image([.cpu, .memory, .network], style: style, labels: labels, gap: 8, status: s, power: nil)
+                let image = MenuMetric.image([.cpu, .memory, .network], look: MenuLook(style: style, labels: labels), status: s, power: nil)
                 #expect(image.size.height == 22 && image.size.width > 40)
             }
         }
@@ -198,6 +198,20 @@ struct MenuMetricsTests {
         #expect(list.allowed == ["a", "self"])
         #expect(list == HideList.make(running: ["self", "b", "a"], hidden: ["quit", "b"]))
         #expect(list != HideList.make(running: ["a", "b", "c", "self"], hidden: ["b", "quit"]))
+    }
+
+    @Test func fittedCellsLeaveNoSpareWidth() {
+        let runtime = MenuMetric.Cell(top: "残り", bottom: "4.1h", widest: "88.8h").fitted()
+        #expect(runtime.widest == "4.1h")
+        let power = MenuMetric.Cell(top: "100W", bottom: "2W", widest: "188W", pair: true).fitted()
+        #expect(power.widest == "100W")
+    }
+
+    @Test func insetsWidenTheImage() throws {
+        let s = try status(#"{"cpu":{"usage":18.4}}"#)
+        let plain = MenuMetric.image([.cpu], look: MenuLook(), status: s, power: nil).size.width
+        let padded = MenuMetric.image([.cpu], look: MenuLook(leading: 3, trailing: 5), status: s, power: nil).size.width
+        #expect(padded == plain + 8)
     }
 
     @Test func keepsOnlyKnownMetrics() {

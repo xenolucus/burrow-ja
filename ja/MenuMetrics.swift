@@ -63,6 +63,17 @@ enum MenuStyle: String, CaseIterable, Identifiable {
     var keepsLayoutWithoutLabels: Bool { self == .pill || self == .bold || self == .mini || self == .underline }
 }
 
+/// Everything the settings can change about how the values are drawn.
+struct MenuLook {
+    var style = MenuStyle.stacked
+    var labels = true
+    var gap: CGFloat = 8
+    /// Keeps each column at its widest possible text, so nothing moves as numbers change.
+    var fixedWidth = false
+    var leading: CGFloat = 0
+    var trailing: CGFloat = 0
+}
+
 /// One live value in the menu bar.
 enum MenuMetric: String, CaseIterable, Identifiable {
     case cpu, memory, temperature, battery, power, runtime, disk, network
@@ -71,6 +82,9 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     static let defaultValue = "cpu,memory,network"
     static let labelsKey = "menuLabels"
     static let gapKey = "menuGap"
+    static let fixedWidthKey = "menuFixedWidth"
+    static let leadingKey = "menuLeading"
+    static let trailingKey = "menuTrailing"
     static let defaultGap = 8.0
     static let intervalKey = "menuInterval"
     static let defaultInterval = 5
@@ -129,6 +143,13 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         var fraction: Double?
         /// Both lines are values, drawn at the same size and right-aligned.
         var pair = false
+
+        /// Sizes the column to the text it shows now, with no spare room beside it.
+        func fitted() -> Cell {
+            var cell = self
+            cell.widest = pair && top.count > bottom.count ? top : bottom
+            return cell
+        }
 
         /// Keeps the arrows, which carry meaning; "入" and "使" go with the other labels.
         func withoutLabels() -> Cell {
@@ -200,18 +221,23 @@ enum MenuMetric: String, CaseIterable, Identifiable {
 
     /// One template image, so the menu bar tints it for light, dark and wallpaper.
     /// The app icon appears only when no value is on, so the item never disappears.
-    static func image(_ metrics: [MenuMetric], style: MenuStyle, labels: Bool, gap: CGFloat, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
+    static func image(_ metrics: [MenuMetric], look: MenuLook, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
         let cells = status.map { s in
-            metrics.compactMap { m in m.cell(s, power: power).map { (m, labels ? $0 : $0.withoutLabels()) } }
+            metrics.compactMap { m in
+                m.cell(s, power: power).map { cell in
+                    let shown = look.labels ? cell : cell.withoutLabels()
+                    return (m, look.fixedWidth ? shown : shown.fitted())
+                }
+            }
         } ?? []
         guard !cells.isEmpty else { return TrayIcon.image }
-        let widths = cells.map { columnWidth($0.0, $0.1, style, labels: labels) }
-        let width = widths.reduce(0, +) + gap * CGFloat(widths.count - 1)
+        let widths = cells.map { columnWidth($0.0, $0.1, look.style, labels: look.labels) }
+        let width = look.leading + look.trailing + widths.reduce(0, +) + look.gap * CGFloat(widths.count - 1)
         let image = NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
-            var x: CGFloat = 0
+            var x = look.leading
             for ((metric, cell), columnWidth) in zip(cells, widths) {
-                draw(metric, cell, style, labels: labels, x: x, width: columnWidth)
-                x += columnWidth + gap
+                draw(metric, cell, look.style, labels: look.labels, x: x, width: columnWidth)
+                x += columnWidth + look.gap
             }
             return true
         }
@@ -328,10 +354,14 @@ struct TrayLabel: View {
     @AppStorage(MenuStyle.storageKey) private var style = MenuStyle.stacked.rawValue
     @AppStorage(MenuMetric.labelsKey) private var labels = true
     @AppStorage(MenuMetric.gapKey) private var gap = MenuMetric.defaultGap
+    @AppStorage(MenuMetric.fixedWidthKey) private var fixedWidth = false
+    @AppStorage(MenuMetric.leadingKey) private var leading = 0.0
+    @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
 
     var body: some View {
-        Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), style: MenuStyle(rawValue: style) ?? .stacked,
-                                        labels: labels, gap: gap, status: monitor.status, power: monitor.power))
+        let look = MenuLook(style: MenuStyle(rawValue: style) ?? .stacked, labels: labels, gap: gap,
+                            fixedWidth: fixedWidth, leading: leading, trailing: trailing)
+        Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), look: look, status: monitor.status, power: monitor.power))
     }
 }
 
@@ -369,39 +399,58 @@ struct MenuMetricsCard: View {
     @AppStorage(MenuMetric.gapKey) private var gap = MenuMetric.defaultGap
     @AppStorage(MenuMetric.intervalKey) private var interval = MenuMetric.defaultInterval
 
+    @AppStorage(MenuMetric.fixedWidthKey) private var fixedWidth = false
+    @AppStorage(MenuMetric.leadingKey) private var leading = 0.0
+    @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
+
     private var selected: [MenuMetric] { MenuMetric.selected(stored) }
 
     var body: some View {
         GlowCard(glow: .blue, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 14) {
                 Text("メニューバーの表示").cardTitle()
-                Text("オンにした順に左から並びます。矢印で順番を変えられます。すべてオフにすると測定を止めます。").caption()
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(selected + MenuMetric.allCases.filter { !selected.contains($0) }) { metric in row(metric) }
-                }
-                Toggle("ラベルを表示（CPU、MEM、入、使など）", isOn: $labels)
-                    .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
-                HStack(spacing: 12) {
-                    Text("値どうしの間隔").font(.system(size: 13)).frame(width: 110, alignment: .leading)
-                    Slider(value: $gap, in: 2...24, step: 1).accessibilityLabel("値どうしの間隔")
-                    Text("\(Int(gap)) pt").font(.system(size: 13, weight: .medium)).monospacedDigit().frame(width: 44, alignment: .trailing)
-                }
-                HStack(spacing: 12) {
-                    Text("更新の間隔").font(.system(size: 13)).frame(width: 110, alignment: .leading)
-                    Picker("更新の間隔", selection: $interval) {
-                        ForEach([2, 5, 10, 30], id: \.self) { Text("\($0)秒").tag($0) }
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: 28, alignment: .top)], alignment: .leading, spacing: 14) {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("オンにした順に左から並びます。").caption()
+                        LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 6) {
+                            ForEach(selected + MenuMetric.allCases.filter { !selected.contains($0) }) { metric in row(metric) }
+                        }
                     }
-                    .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 260)
-                    .onChange(of: interval) { _, _ in
-                        if monitor.isRunning { monitor.stop(); monitor.start() }
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack(spacing: 18) {
+                            Toggle("ラベル", isOn: $labels).help("CPU、MEM、入、使などの文字")
+                            Toggle("幅を固定", isOn: $fixedWidth).help("数値が変わっても位置が動きません。代わりに余白が増えます。")
+                        }
+                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                        slider("値どうしの間隔", $gap, 2...24)
+                        slider("左の余白", $leading, 0...12)
+                        slider("右の余白", $trailing, 0...12)
+                        HStack(spacing: 12) {
+                            Text("更新の間隔").font(.system(size: 13)).frame(width: 96, alignment: .leading)
+                            Picker("更新の間隔", selection: $interval) {
+                                ForEach([2, 5, 10, 30], id: \.self) { Text("\($0)秒").tag($0) }
+                            }
+                            .pickerStyle(.segmented).labelsHidden()
+                            .onChange(of: interval) { _, _ in
+                                if monitor.isRunning { monitor.stop(); monitor.start() }
+                            }
+                        }
                     }
                 }
-                Text("間隔を長くすると、バッテリーと CPU の負荷が減ります。画面がスリープすると測定を止めます。").caption()
-                Text("デザイン").font(.system(size: 13, weight: .semibold))
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: 300), alignment: .leading)], alignment: .leading, spacing: 8) {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: 250), alignment: .leading)], alignment: .leading, spacing: 8) {
                     ForEach(MenuStyle.allCases) { option in preview(option) }
                 }
+                Text("更新の間隔を長くすると負荷が減ります。画面のスリープ中は測定を止めます。").caption()
             }
+        }
+    }
+
+    private func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>) -> some View {
+        HStack(spacing: 12) {
+            Text(title).font(.system(size: 13)).frame(width: 96, alignment: .leading)
+            Slider(value: value, in: range, step: 1).accessibilityLabel(title)
+            Text("\(Int(value.wrappedValue)) pt").font(.system(size: 13, weight: .medium)).monospacedDigit()
+                .frame(width: 40, alignment: .trailing)
         }
     }
 
@@ -429,12 +478,14 @@ struct MenuMetricsCard: View {
         Button { style = option.rawValue } label: {
             HStack(spacing: 10) {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
-                Text(option.title).font(.system(size: 13)).frame(width: 84, alignment: .leading)
-                Image(nsImage: MenuMetric.image(selected, style: option, labels: labels, gap: gap, status: monitor.status, power: monitor.power))
+                Text(option.title).font(.system(size: 13)).frame(width: 74, alignment: .leading)
+                Image(nsImage: MenuMetric.image(selected, look: MenuLook(style: option, labels: labels, gap: gap, fixedWidth: fixedWidth,
+                                                                         leading: leading, trailing: trailing),
+                                                status: monitor.status, power: monitor.power))
                     .renderingMode(.template)
                 Spacer(minLength: 0)
             }
-            .padding(10)
+            .padding(.horizontal, 10).frame(height: 36)
             .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(style == option.rawValue ? 0.12 : 0.05)))
             .contentShape(Rectangle())
         }
