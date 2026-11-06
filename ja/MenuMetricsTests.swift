@@ -172,12 +172,9 @@ struct MenuMetricsTests {
         #expect(!OldVideoScanner.isOld(path: "/V/a.psd", bytes: OldVideoScanner.minBytes, lastUsed: old, now: now))
     }
 
-    @Test func spacingMapsToKnownValues() {
-        #expect(MenuSpacing.standard.values == nil)
-        #expect(MenuSpacing.matching(spacing: 8) == .narrow)
-        #expect(MenuSpacing.matching(spacing: 4) == .minimum)
-        #expect(MenuSpacing.matching(spacing: nil) == .standard)
-        #expect(MenuSpacing.matching(spacing: 13) == .standard)
+    @Test func spacingLabel() {
+        #expect(MenuSpacing.label(nil) == "標準")
+        #expect(MenuSpacing.label(7) == "7 pt")
     }
 
     @Test func keepsOnlyKnownMetrics() {
