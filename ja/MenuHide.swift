@@ -40,7 +40,7 @@ final class MenuGroupBar: NSObject {
     private var items: [String: NSStatusItem] = [:]
     private let popover = NSPopover()
 
-    func sync(_ groups: [MenuGroup]) {
+    func sync(_ groups: [MenuGroup], expanded: Set<String> = []) {
         for id in Set(items.keys).subtracting(groups.map(\.id)) {
             items.removeValue(forKey: id).map(NSStatusBar.system.removeStatusItem)
         }
@@ -54,10 +54,18 @@ final class MenuGroupBar: NSObject {
             item.button?.identifier = NSUserInterfaceItemIdentifier(group.id)
             item.button?.target = self
             item.button?.action = #selector(clicked)
+            item.button?.sendAction(on: [.leftMouseUp, .rightMouseUp])
+            item.button?.contentTintColor = expanded.contains(group.id) ? .controlAccentColor : nil
         }
     }
 
+    /// A left click opens the group right in the menu bar; a right click lists it in a panel.
     @objc private func clicked(_ sender: NSStatusBarButton) {
+        if NSApp.currentEvent?.type != .rightMouseUp {
+            popover.performClose(nil)
+            MenuHider.shared.toggleGroup(sender.identifier?.rawValue ?? "")
+            return
+        }
         if popover.isShown { return popover.performClose(nil) }
         popover.behavior = .transient
         popover.contentViewController = NSHostingController(rootView: MenuGroupView(groupID: sender.identifier?.rawValue ?? "") { [weak self] in
@@ -201,6 +209,15 @@ final class MenuHider: ObservableObject {
     private var restriction: MenuBarRestriction?
     private var revealTask: Task<Void, Never>?
     private var pressTask: Task<Void, Never>?
+    private var collapseTask: Task<Void, Never>?
+    private var roomTask: Task<Void, Never>?
+    /// macOS folded items away, so everything else steps aside while a group is open.
+    private var makingRoom = false
+    /// Groups opened from their icon, whose apps are back in the menu bar for now.
+    @Published private(set) var expanded = Set<String>()
+    /// Seconds an opened group stays open; 0 keeps it open until clicked again.
+    static let collapseKey = "menuCollapseSeconds"
+    static let defaultCollapse = 15
     /// The hidden app let through for a moment, so its item can be pressed.
     private var passing: String?
     private var watching = false
@@ -301,7 +318,7 @@ final class MenuHider: ObservableObject {
 
     private func save() {
         UserDefaults.standard.set(try? JSONEncoder().encode(groups), forKey: Self.groupsKey)
-        if enabled { bar.sync(groups) }
+        if enabled { bar.sync(groups, expanded: expanded) }
         apply()
         refreshApps()
     }
@@ -348,7 +365,36 @@ final class MenuHider: ObservableObject {
         }
     }
 
-    /// The group's click: shows just this app's item and presses it, so its own menu opens.
+    func toggleGroup(_ id: String) {
+        if expanded.remove(id) == nil { expanded.insert(id) }
+        makingRoom = false
+        bar.sync(groups, expanded: expanded)
+        apply()
+        roomTask?.cancel()
+        if !expanded.isEmpty {
+            roomTask = Task {
+                // MenuBarAgent animates the new layout for about a second before it folds anything.
+                try? await Task.sleep(for: .milliseconds(1200))
+                let folded = await Task.detached(priority: .userInitiated) { Self.menuBarOverflows() }.value
+                guard folded, !Task.isCancelled else { return }
+                makingRoom = true
+                apply()
+            }
+        }
+        collapseTask?.cancel()
+        let stored = UserDefaults.standard.object(forKey: Self.collapseKey) as? Int ?? Self.defaultCollapse
+        guard stored > 0, !expanded.isEmpty else { return }
+        collapseTask = Task {
+            try? await Task.sleep(for: .seconds(stored))
+            guard !Task.isCancelled else { return }
+            expanded = []
+            makingRoom = false
+            bar.sync(groups)
+            apply()
+        }
+    }
+
+    /// The panel's click: shows just this app's item and presses it, so its own menu opens.
     /// shortcut: hides again after a fixed time, not when the menu closes; watch the menu to upgrade.
     private static func iconFile(_ id: String) -> URL {
         let folder = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -413,6 +459,30 @@ final class MenuHider: ObservableObject {
         }
     }
 
+    /// macOS draws a « button in a childless slot when items no longer fit.
+    private nonisolated static func menuBarOverflows() -> Bool {
+        guard let agent = NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.MenuBarAgent").first else { return false }
+        func children(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else { return [] }
+            return value as? [AXUIElement] ?? []
+        }
+        let app = AXUIElementCreateApplication(agent.processIdentifier)
+        AXUIElementSetMessagingTimeout(app, 1)
+        return children(app, kAXWindowsAttribute).contains { window in
+            children(window, kAXChildrenAttribute).contains { slot in
+                var role: CFTypeRef?
+                AXUIElementCopyAttributeValue(slot, kAXRoleAttribute as CFString, &role)
+                return children(slot, kAXChildrenAttribute).isEmpty && role as? String == kAXButtonRole
+            }
+        }
+    }
+
+    /// While making room, every other third-party app hides so the opened items fit.
+    nonisolated static func withRoom(_ list: Set<String>, running: [String], keep: Set<String>, own: String?) -> Set<String> {
+        list.union(running.filter { listable($0, own: own) && !keep.contains($0) })
+    }
+
     private nonisolated static func pressMenuBarItem(of id: String) -> Bool {
         guard let owner = menuBarSlot(of: id)?.owner else { return false }
         AXUIElementSetMessagingTimeout(owner, 1)
@@ -451,15 +521,22 @@ final class MenuHider: ObservableObject {
         return nil
     }
 
-    /// What stays hidden once `passing` is let through.
-    nonisolated static func stillHidden(_ hidden: Set<String>, passing: String?) -> Set<String> {
-        passing.map { hidden.subtracting([$0]) } ?? hidden
+    /// What stays hidden once `passing` and the opened groups' apps are let through.
+    nonisolated static func stillHidden(_ groups: [MenuGroup], expanded: Set<String>, passing: String?) -> Set<String> {
+        let opened = groups.filter { expanded.contains($0.id) }.flatMap(\.apps)
+        return Set(groups.flatMap(\.apps)).subtracting(opened + [passing].compactMap { $0 })
     }
 
     private func apply() {
         guard enabled, !revealed, !hidden.isEmpty else { return restriction?.release() ?? () }
         let running = NSWorkspace.shared.runningApplications.compactMap(\.bundleIdentifier)
-        restriction?.apply(.make(running: running, hidden: Self.stillHidden(hidden, passing: passing), own: Bundle.main.bundleIdentifier))
+        var list = Self.stillHidden(groups, expanded: expanded, passing: passing)
+        if makingRoom {
+            let opened = Set(groups.filter { expanded.contains($0.id) }.flatMap(\.apps))
+            list = Self.withRoom(list, running: running, keep: opened, own: Bundle.main.bundleIdentifier)
+        }
+        guard !list.isEmpty else { return restriction?.release() ?? () }
+        restriction?.apply(.make(running: running, hidden: list, own: Bundle.main.bundleIdentifier))
     }
 
     /// The allow-list is a snapshot, so an app that starts later needs a new one to stay visible.
@@ -534,6 +611,7 @@ struct MenuGroupView: View {
 struct MenuHideCard: View {
     @ObservedObject private var hider = MenuHider.shared
     @ViewState private var selectedID: String?
+    @AppStorage(MenuHider.collapseKey) private var collapse = MenuHider.defaultCollapse
 
     private var selected: MenuGroup? { hider.groups.first { $0.id == selectedID } ?? hider.groups.first }
 
@@ -602,7 +680,7 @@ struct MenuHideCard: View {
                     Toggle("オン", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
-                Text("選んだアプリの項目を隠し、1つのアイコンにまとめます。まとめは複数作れます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
+                Text("アイコンを押すと、まとめたアプリがメニューバーに出ます。もう一度押すと隠れます。右クリックで一覧を開きます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
                 if let problem = hider.problem {
                     Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
                 }
@@ -613,6 +691,13 @@ struct MenuHideCard: View {
                             Spacer()
                             Button("許可する") { hider.askForAccessibility() }.buttonStyle(.pillSecondary)
                         }
+                    }
+                    HStack(spacing: 12) {
+                        Text("自動で隠すまで").font(.system(size: 13))
+                        Picker("自動で隠すまで", selection: $collapse) {
+                            ForEach([5, 15, 30, 0], id: \.self) { Text($0 == 0 ? "隠さない" : "\($0)秒").tag($0) }
+                        }
+                        .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 280)
                     }
                     if let group = selected {
                         groupEditor(group)

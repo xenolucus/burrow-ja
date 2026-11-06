@@ -223,9 +223,16 @@ struct MenuMetricsTests {
         #expect(!MenuHider.listable("me", own: "me"))
     }
 
-    @Test func onePressLetsOneAppThrough() {
-        #expect(MenuHider.stillHidden(["a", "b"], passing: "a") == ["b"])
-        #expect(MenuHider.stillHidden(["a", "b"], passing: nil) == ["a", "b"])
+    @Test func makingRoomKeepsOnlyTheOpenedApps() {
+        let list = MenuHider.withRoom(["hidden"], running: ["a", "open", "me", "com.apple.x"], keep: ["open"], own: "me")
+        #expect(list == ["hidden", "a"])
+    }
+
+    @Test func openingAGroupShowsOnlyItsApps() {
+        let one = MenuGroup(id: "1", apps: ["a", "b"]), two = MenuGroup(id: "2", apps: ["c"])
+        #expect(MenuHider.stillHidden([one, two], expanded: [], passing: nil) == ["a", "b", "c"])
+        #expect(MenuHider.stillHidden([one, two], expanded: ["1"], passing: nil) == ["c"])
+        #expect(MenuHider.stillHidden([one, two], expanded: [], passing: "c") == ["a", "b"])
     }
 
     @Test func groupsKeepOlderHiddenApps() throws {
