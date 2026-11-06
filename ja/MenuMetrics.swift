@@ -223,11 +223,10 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     /// The app icon appears only when no value is on, so the item never disappears.
     static func image(_ metrics: [MenuMetric], look: MenuLook, status: SystemStatus?, power: PowerMeter.Reading?) -> NSImage {
         let cells = status.map { s in
-            metrics.compactMap { m in
-                m.cell(s, power: power).map { cell in
-                    let shown = look.labels ? cell : cell.withoutLabels()
-                    return (m, look.fixedWidth ? shown : shown.fitted())
-                }
+            metrics.compactMap { m -> (MenuMetric, Cell)? in
+                guard let cell = m.cell(s, power: power) else { return nil }
+                let shown = look.labels ? cell : cell.withoutLabels()
+                return (m, look.fixedWidth ? shown : shown.fitted())
             }
         } ?? []
         guard !cells.isEmpty else { return TrayIcon.image }
