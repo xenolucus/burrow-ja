@@ -76,6 +76,8 @@ struct MenuLook {
     var offset: CGFloat = 0
     /// Extra room between the two lines of a value.
     var lineGap: CGFloat = 0
+    /// Per-value adjustments, by `MenuMetric.rawValue`.
+    var tweaks: [String: MenuTweak] = [:]
 }
 
 /// One live value in the menu bar.
@@ -239,16 +241,33 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             }
         } ?? []
         guard !cells.isEmpty else { return TrayIcon.image }
-        let widths = cells.map { columnWidth($0.0, $0.1, look.style, labels: look.labels) }
-        let width = look.leading + look.trailing + widths.reduce(0, +) + look.gap * CGFloat(widths.count - 1)
+        func tweak(_ metric: MenuMetric) -> MenuTweak { look.tweaks[metric.rawValue] ?? MenuTweak() }
+        let bases = cells.map { columnWidth($0.0, $0.1, look.style, labels: look.labels) }
+        let widths = zip(cells, bases).map { item, base in
+            tweak(item.0).width(base: base, addsIcon: tweak(item.0).addsIcon(style: look.style, pair: item.1.pair))
+        }
+        // A first or last value moved outwards would otherwise be cut off at the image edge.
+        let before = max(0, -CGFloat(tweak(cells[0].0).x)), after = max(0, CGFloat(tweak(cells[cells.count - 1].0).x))
+        let width = look.leading + look.trailing + before + after + widths.reduce(0, +) + look.gap * CGFloat(widths.count - 1)
         let image = NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
-            var x = look.leading
+            var x = look.leading + before
             let shift = NSAffineTransform()
             shift.translateX(by: 0, yBy: look.offset)
             shift.concat()
-            for ((metric, cell), columnWidth) in zip(cells, widths) {
-                draw(metric, cell, look.style, labels: look.labels, lineGap: look.lineGap, x: x, width: columnWidth)
-                x += columnWidth + look.gap
+            for (index, (metric, cell)) in cells.enumerated() {
+                let adjust = tweak(metric), icon = adjust.addsIcon(style: look.style, pair: cell.pair)
+                NSGraphicsContext.saveGraphicsState()
+                // Scales around the bar's middle, so a resized value stays vertically centered.
+                let place = NSAffineTransform()
+                place.translateX(by: x + CGFloat(adjust.x), yBy: 11 + CGFloat(adjust.y))
+                place.scale(by: CGFloat(adjust.scale))
+                place.translateX(by: 0, yBy: -11)
+                place.concat()
+                if icon, let symbol = adjust.symbol { drawSymbol(symbol, x: 0) }
+                draw(metric, cell, look.style, labels: look.labels, lineGap: look.lineGap, x: icon ? MenuTweak.iconWidth : 0,
+                     width: bases[index], symbol: adjust.symbol ?? metric.symbol)
+                NSGraphicsContext.restoreGraphicsState()
+                x += widths[index] + look.gap
             }
             return true
         }
@@ -291,7 +310,14 @@ enum MenuMetric: String, CaseIterable, Identifiable {
 
     private static func miniLabel(_ cell: Cell, _ labels: Bool) -> String { labels ? cell.top + " " : "" }
 
-    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, lineGap: CGFloat, x: CGFloat, width: CGFloat) {
+    private static func drawSymbol(_ name: String, x: CGFloat) {
+        guard let image = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)) else { return }
+        image.draw(in: NSRect(x: x, y: 11 - image.size.height / 2, width: image.size.width, height: image.size.height))
+    }
+
+    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, lineGap: CGFloat, x: CGFloat, width: CGFloat,
+                             symbol: String) {
         let upper = 11 + lineGap / 2, lower = -lineGap / 2
         func text(_ string: String, _ attributes: [NSAttributedString.Key: Any], right: CGFloat, y: CGFloat) {
             let drawn = NSAttributedString(string: string, attributes: attributes)
@@ -348,10 +374,7 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             NSAttributedString(string: cell.top, attributes: small).draw(at: NSPoint(x: x, y: 6))
             text(cell.bottom, line, right: right, y: 3)
         case .symbol where !cell.pair:
-            if let image = NSImage(systemSymbolName: metric.symbol, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 11, weight: .medium)) {
-                image.draw(in: NSRect(x: x, y: 11 - image.size.height / 2, width: image.size.width, height: image.size.height))
-            }
+            drawSymbol(symbol, x: x)
             text(cell.bottom, line, right: right, y: 3)
         case _ where cell.pair:
             labeled(cell.top, value, left: x, right: right, y: upper)
@@ -378,10 +401,11 @@ struct TrayLabel: View {
     @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
     @AppStorage(MenuMetric.offsetKey) private var offset = 0.0
     @AppStorage(MenuMetric.lineGapKey) private var lineGap = 0.0
+    @AppStorage(MenuTweak.storageKey) private var tweaks = ""
 
     var body: some View {
         let look = MenuLook(style: MenuStyle(rawValue: style) ?? .stacked, labels: labels, gap: gap, fixedWidth: fixedWidth,
-                            leading: leading, trailing: trailing, offset: offset, lineGap: lineGap)
+                            leading: leading, trailing: trailing, offset: offset, lineGap: lineGap, tweaks: MenuTweak.load(tweaks))
         Image(nsImage: Page.isHidden(.menubar) ? TrayIcon.image
               : MenuMetric.image(MenuMetric.selected(stored), look: look, status: monitor.status, power: monitor.power))
     }
@@ -426,6 +450,7 @@ struct MenuMetricsCard: View {
     @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
     @AppStorage(MenuMetric.offsetKey) private var offset = 0.0
     @AppStorage(MenuMetric.lineGapKey) private var lineGap = 0.0
+    @AppStorage(MenuTweak.storageKey) private var tweaks = ""
 
     private var selected: [MenuMetric] { MenuMetric.selected(stored) }
 
@@ -506,7 +531,8 @@ struct MenuMetricsCard: View {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
                 Text(option.title).font(.system(size: 13)).frame(width: 74, alignment: .leading)
                 Image(nsImage: MenuMetric.image(selected, look: MenuLook(style: option, labels: labels, gap: gap, fixedWidth: fixedWidth,
-                                                                         leading: leading, trailing: trailing, offset: offset, lineGap: lineGap),
+                                                                         leading: leading, trailing: trailing, offset: offset, lineGap: lineGap,
+                                                                         tweaks: MenuTweak.load(tweaks)),
                                                 status: monitor.status, power: monitor.power))
                     .renderingMode(.template)
                 Spacer(minLength: 0)

@@ -13,7 +13,9 @@ struct MenuBarPage: View {
             PillPicker(selection: $tab, options: [("値の表示", Tab.values.rawValue), ("項目の間隔", Tab.spacing.rawValue),
                                                   ("まとめ", Tab.groups.rawValue)])
             switch Tab(rawValue: tab) ?? .values {
-            case .values: MenuMetricsCard(monitor: model.status)
+            case .values:
+                MenuMetricsCard(monitor: model.status)
+                MenuTweakCard()
             case .spacing: MenuSpacingCard()
             case .groups:
                 if hider.enabled {

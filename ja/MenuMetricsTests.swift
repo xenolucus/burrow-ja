@@ -228,6 +228,31 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func menuTweaksSurviveSavingAndDropDefaults() {
+        var tweak = MenuTweak()
+        tweak.symbol = "flame"
+        tweak.scale = 1.2
+        let text = MenuTweak.save(["cpu": tweak, "memory": MenuTweak()])
+        #expect(MenuTweak.load(text) == ["cpu": tweak])
+        #expect(MenuTweak.load("broken").isEmpty)
+    }
+
+    @Test func menuTweakWidthCountsIconAndScale() {
+        var tweak = MenuTweak()
+        tweak.symbol = "flame"
+        tweak.scale = 0.5
+        #expect(tweak.width(base: 20, addsIcon: false) == 10)
+        #expect(tweak.width(base: 20, addsIcon: true) == (20 + MenuTweak.iconWidth) / 2)
+        #expect(tweak.addsIcon(style: .stacked, pair: false))
+        #expect(!tweak.addsIcon(style: .symbol, pair: false))
+        #expect(tweak.addsIcon(style: .symbol, pair: true))
+        #expect(!MenuTweak().addsIcon(style: .stacked, pair: false))
+    }
+
+    @Test func menuTweakSymbolsExist() {
+        for symbol in MenuTweak.symbols { #expect(NSImage(systemSymbolName: symbol, accessibilityDescription: nil) != nil) }
+    }
+
     @Test func dockIconOnlyHidesWhileTheMenuBarIconCanReopenTheApp() {
         #expect(DockIcon.policy(hidden: true, inMenuBar: true) == .accessory)
         #expect(DockIcon.policy(hidden: true, inMenuBar: false) == .regular)
