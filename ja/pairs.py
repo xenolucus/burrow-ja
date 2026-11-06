@@ -348,7 +348,7 @@ T = {
     # "アンインストール" wraps once the row shows its status dot.
     R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
     R('Text("Burrow").font(.system(size: 17', 'Text("Burrow JA").font(.system(size: 17'),
-    q(r"Engine: Mole \(Mole.version)", r"Burrow JA \(AppUpdates.version)\nBurrow \(AppUpdates.baseVersion)\nMole \(Mole.version)"), q("Scanning", "スキャン中"),
+    q(r"Engine: Mole \(Mole.version)", r"Mole \(Mole.version)\nBurrow \(AppUpdates.baseVersion)\nBurrow JA \(AppUpdates.version)"), q("Scanning", "スキャン中"),
 ],
 }
 

@@ -60,14 +60,6 @@ final class MenuGroupBar: NSObject {
         }
     }
 
-    /// The icon's frame in the top-left coordinates that events and Accessibility use.
-    func frame(of id: String) -> CGRect? {
-        guard let window = items[id]?.button?.window, let height = NSScreen.screens.first?.frame.height else { return nil }
-        var frame = window.frame
-        frame.origin.y = height - frame.maxY
-        return frame
-    }
-
     /// A left click opens the group right in the menu bar; a right click lists it in a panel.
     @objc private func clicked(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type != .rightMouseUp {
@@ -227,7 +219,6 @@ final class MenuHider: ObservableObject {
     /// Seconds an opened group stays open; 0 keeps it open until clicked again.
     static let collapseKey = "menuCollapseSeconds"
     static let defaultCollapse = 15
-    private static let arrangedKey = "menuArrangedApps"
     /// The hidden app let through for a moment, so its item can be pressed.
     private var passing: String?
     private var watching = false
@@ -385,7 +376,6 @@ final class MenuHider: ObservableObject {
             roomTask = Task {
                 // MenuBarAgent animates the new layout for about a second before it folds anything.
                 try? await Task.sleep(for: .milliseconds(1200))
-                await arrange(id)
                 let folded = await Task.detached(priority: .userInitiated) { Self.menuBarOverflows() }.value
                 guard folded, !Task.isCancelled else { return }
                 makingRoom = true
@@ -468,39 +458,6 @@ final class MenuHider: ObservableObject {
             passing = nil
             apply()
         }
-    }
-
-    /// Moves a group's items beside its icon once, the way a person would with Command-drag:
-    /// only the system can place items, and it remembers where they were put.
-    private func arrange(_ id: String) async {
-        guard canSeeMenuBar, let group = groups.first(where: { $0.id == id }), let icon = bar.frame(of: id) else { return }
-        var done = Set(UserDefaults.standard.stringArray(forKey: Self.arrangedKey) ?? [])
-        for app in group.apps where !done.contains(app) {
-            let frame = await Task.detached(priority: .userInitiated) { Self.itemFrame(of: app) }.value
-            guard let frame else { continue }
-            if frame.midX > icon.minX || icon.minX - frame.maxX > 4 {
-                Self.commandDrag(from: CGPoint(x: frame.midX, y: frame.midY), to: CGPoint(x: icon.minX - 2, y: icon.midY))
-                try? await Task.sleep(for: .milliseconds(350))
-            }
-            done.insert(app)
-        }
-        UserDefaults.standard.set(done.sorted(), forKey: Self.arrangedKey)
-    }
-
-    private static func commandDrag(from start: CGPoint, to end: CGPoint) {
-        let pointer = CGEvent(source: nil)?.location
-        func post(_ type: CGEventType, _ point: CGPoint) {
-            let event = CGEvent(mouseEventSource: nil, mouseType: type, mouseCursorPosition: point, mouseButton: .left)
-            event?.flags = .maskCommand
-            event?.post(tap: .cghidEventTap)
-            usleep(30_000)
-        }
-        post(.mouseMoved, start)
-        post(.leftMouseDown, start)
-        post(.leftMouseDragged, CGPoint(x: (start.x + end.x) / 2, y: end.y))
-        post(.leftMouseDragged, end)
-        post(.leftMouseUp, end)
-        if let pointer { CGWarpMouseCursorPosition(pointer) }
     }
 
     /// macOS draws a « button in a childless slot when items no longer fit.
