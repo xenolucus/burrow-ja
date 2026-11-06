@@ -10,6 +10,11 @@ enum AppUpdates {
     static var version: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "–"
     }
+
+    /// The Burrow release this build is based on.
+    static var baseVersion: String {
+        Bundle.main.object(forInfoDictionaryKey: "BurrowBaseVersion") as? String ?? "–"
+    }
 }
 
 struct UpdatesCard: View {

@@ -67,7 +67,9 @@ def patch_bundle(text, public_key):
         text, count = re.subn(r"\s*<key>SU[A-Za-z]+</key>.*", "", text)
         assert count == 4, f"expected 4 Sparkle keys, found {count}"
     text = text.replace("<key>SUAutomaticallyUpdate</key><true/>", "<key>SUAutomaticallyUpdate</key><false/>")
-    region = "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
+    base = (ROOT / "VERSION").read_text().strip()
+    region = f"    <key>BurrowBaseVersion</key><string>{base}</string>\n" \
+             "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
              "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
     text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
     text = replace_once(text, 'codesign --force --deep --sign - "$APP"\n', STABLE_SIGNING)
