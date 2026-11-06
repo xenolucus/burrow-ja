@@ -26,9 +26,13 @@ enum DuplicateFinder {
         defer { try? file.close() }
         var hasher = SHA256()
         while !Task.isCancelled {
-            guard let chunk = try? file.read(upToCount: 1 << 20) else { return nil }
-            if chunk.isEmpty { return hasher.finalize() }
-            hasher.update(data: chunk)
+            do {
+                // nil, not empty data, marks the end of the file.
+                guard let chunk = try file.read(upToCount: 1 << 20), !chunk.isEmpty else { return hasher.finalize() }
+                hasher.update(data: chunk)
+            } catch {
+                return nil
+            }
         }
         return nil
     }

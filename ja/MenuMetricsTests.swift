@@ -365,7 +365,7 @@ struct MenuMetricsTests {
     }
 
     @Test func sidebarOrderAndExtras() {
-        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .slim, .menubar]
+        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .duplicates, .slim, .menubar]
         #expect(Page.main(order: "", hidden: "") == standard)
         #expect(Page.sidebar(order: "", hidden: "").suffix(3) == [.history, .totals, .settings])
         let reordered = Page.main(order: "clean,overview", hidden: "drives,menubar")
