@@ -72,6 +72,10 @@ struct MenuLook {
     var fixedWidth = false
     var leading: CGFloat = 0
     var trailing: CGFloat = 0
+    /// Moves every value up or down inside the menu bar.
+    var offset: CGFloat = 0
+    /// Extra room between the two lines of a value.
+    var lineGap: CGFloat = 0
 }
 
 /// One live value in the menu bar.
@@ -85,6 +89,8 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     static let fixedWidthKey = "menuFixedWidth"
     static let leadingKey = "menuLeading"
     static let trailingKey = "menuTrailing"
+    static let offsetKey = "menuOffset"
+    static let lineGapKey = "menuLineGap"
     static let defaultGap = 8.0
     static let intervalKey = "menuInterval"
     static let defaultInterval = 5
@@ -139,15 +145,17 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         var bottom: String
         /// The widest text the value can reach, so columns never jump as numbers change.
         var widest: String
+        /// The width for everyday values, so labels stay put without fixing the full width.
+        var usual = ""
         /// 0...1 for the meter style; nil when a bar means nothing.
         var fraction: Double?
         /// Both lines are values, drawn at the same size and right-aligned.
         var pair = false
 
-        /// Sizes the column to the text it shows now, with no spare room beside it.
+        /// Sizes the column to everyday values, growing only for an unusually long one.
         func fitted() -> Cell {
             var cell = self
-            cell.widest = pair && top.count > bottom.count ? top : bottom
+            cell.widest = [usual, bottom, pair ? top : ""].max { $0.count < $1.count } ?? bottom
             return cell
         }
 
@@ -157,6 +165,7 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             cell.top = top.replacingOccurrences(of: "入 ", with: "")
             cell.bottom = bottom.replacingOccurrences(of: "使 ", with: "")
             cell.widest = widest.replacingOccurrences(of: "使 ", with: "")
+            cell.usual = usual.replacingOccurrences(of: "使 ", with: "")
             return cell
         }
     }
@@ -165,26 +174,26 @@ enum MenuMetric: String, CaseIterable, Identifiable {
     func cell(_ s: SystemStatus, power: PowerMeter.Reading?) -> Cell? {
         switch self {
         case .cpu:
-            return s.cpu.map { Cell(top: "CPU", bottom: String(format: "%.0f%%", $0.usage), widest: "100%", fraction: $0.usage / 100) }
+            return s.cpu.map { Cell(top: "CPU", bottom: String(format: "%.0f%%", $0.usage), widest: "100%", usual: "88%", fraction: $0.usage / 100) }
         case .memory:
-            return s.memory.map { Cell(top: "MEM", bottom: String(format: "%.0f%%", $0.used_percent), widest: "100%", fraction: $0.used_percent / 100) }
+            return s.memory.map { Cell(top: "MEM", bottom: String(format: "%.0f%%", $0.used_percent), widest: "100%", usual: "88%", fraction: $0.used_percent / 100) }
         case .temperature:
             // Some Macs report 0 for the CPU sensor; the battery sensor still works there.
             let celsius = [s.thermal?.cpu_temp, s.thermal?.battery_temp].compactMap { $0 }.first { $0 > 0 }
-            return celsius.map { Cell(top: "TEMP", bottom: String(format: "%.0f℃", $0), widest: "100℃", fraction: min($0 / 100, 1)) }
+            return celsius.map { Cell(top: "TEMP", bottom: String(format: "%.0f℃", $0), widest: "100℃", usual: "88℃", fraction: min($0 / 100, 1)) }
         case .battery:
-            return s.batteries?.first?.percent.map { Cell(top: "BAT", bottom: String(format: "%.0f%%", $0), widest: "100%", fraction: $0 / 100) }
+            return s.batteries?.first?.percent.map { Cell(top: "BAT", bottom: String(format: "%.0f%%", $0), widest: "100%", usual: "88%", fraction: $0 / 100) }
         case .power:
-            return power.map { Cell(top: String(format: "入 %.0fW", $0.inputWatts), bottom: String(format: "使 %.0fW", $0.loadWatts), widest: "使 188W", pair: true) }
+            return power.map { Cell(top: String(format: "入 %.0fW", $0.inputWatts), bottom: String(format: "使 %.0fW", $0.loadWatts), widest: "使 188W", usual: "使 88W", pair: true) }
         case .runtime:
-            return power?.hoursLeft.map { Cell(top: "残り", bottom: Self.hoursText($0), widest: "88.8h") }
+            return power?.hoursLeft.map { Cell(top: "残り", bottom: Self.hoursText($0), widest: "88.8h", usual: "8.8h") }
         case .disk:
-            return s.rootDisk.map { Cell(top: "SSD", bottom: Self.storage($0.total - $0.used), widest: "888G",
+            return s.rootDisk.map { Cell(top: "SSD", bottom: Self.storage($0.total - $0.used), widest: "888G", usual: "888G",
                                          fraction: Double($0.used) / Double(max($0.total, 1))) }
         case .network:
             guard let rows = s.network else { return nil }
             let up = rows.compactMap(\.tx_rate_mbs).reduce(0, +), down = rows.compactMap(\.rx_rate_mbs).reduce(0, +)
-            return Cell(top: "↑" + Self.speed(up), bottom: "↓" + Self.speed(down), widest: "↓888K", pair: true)
+            return Cell(top: "↑" + Self.speed(up), bottom: "↓" + Self.speed(down), widest: "↓888K", usual: "↓888K", pair: true)
         }
     }
 
@@ -234,8 +243,11 @@ enum MenuMetric: String, CaseIterable, Identifiable {
         let width = look.leading + look.trailing + widths.reduce(0, +) + look.gap * CGFloat(widths.count - 1)
         let image = NSImage(size: NSSize(width: width, height: 22), flipped: false) { _ in
             var x = look.leading
+            let shift = NSAffineTransform()
+            shift.translateX(by: 0, yBy: look.offset)
+            shift.concat()
             for ((metric, cell), columnWidth) in zip(cells, widths) {
-                draw(metric, cell, look.style, labels: look.labels, x: x, width: columnWidth)
+                draw(metric, cell, look.style, labels: look.labels, lineGap: look.lineGap, x: x, width: columnWidth)
                 x += columnWidth + look.gap
             }
             return true
@@ -279,10 +291,17 @@ enum MenuMetric: String, CaseIterable, Identifiable {
 
     private static func miniLabel(_ cell: Cell, _ labels: Bool) -> String { labels ? cell.top + " " : "" }
 
-    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, x: CGFloat, width: CGFloat) {
+    private static func draw(_ metric: MenuMetric, _ cell: Cell, _ style: MenuStyle, labels: Bool, lineGap: CGFloat, x: CGFloat, width: CGFloat) {
+        let upper = 11 + lineGap / 2, lower = -lineGap / 2
         func text(_ string: String, _ attributes: [NSAttributedString.Key: Any], right: CGFloat, y: CGFloat) {
             let drawn = NSAttributedString(string: string, attributes: attributes)
             drawn.draw(at: NSPoint(x: right - ceil(drawn.size().width), y: y))
+        }
+        /// A label stays at the left edge and its number at the right, so numbers never push it.
+        func labeled(_ string: String, _ attributes: [NSAttributedString.Key: Any], left: CGFloat, right: CGFloat, y: CGFloat) {
+            guard let space = string.firstIndex(of: " ") else { return text(string, attributes, right: right, y: y) }
+            NSAttributedString(string: String(string[..<space]), attributes: attributes).draw(at: NSPoint(x: left, y: y))
+            text(String(string[string.index(after: space)...]), attributes, right: right, y: y)
         }
         let right = x + width
         func gauge() {
@@ -303,18 +322,18 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             frame.lineWidth = 1
             frame.stroke()
             if cell.pair {
-                text(cell.top, value, right: right - 5, y: 10)
-                text(cell.bottom, value, right: right - 5, y: 1)
+                labeled(cell.top, value, left: x + 5, right: right - 5, y: upper - 1)
+                labeled(cell.bottom, value, left: x + 5, right: right - 5, y: lower + 1)
             } else {
                 text(cell.bottom, line, right: right - 5, y: 3)
             }
         case .bold where !cell.pair:
             text(cell.bottom, bold, right: right, y: 2)
         case .mini where cell.pair:
-            text(cell.top, tiny, right: right, y: 11)
-            text(cell.bottom, tiny, right: right, y: 1)
+            labeled(cell.top, tiny, left: x, right: right, y: upper)
+            labeled(cell.bottom, tiny, left: x, right: right, y: lower + 1)
         case .mini:
-            text(miniLabel(cell, labels) + cell.bottom, tiny, right: right, y: 5)
+            labeled(miniLabel(cell, labels) + cell.bottom, tiny, left: x, right: right, y: 5)
         case .underline where !cell.pair:
             text(cell.bottom, line, right: right, y: 6)
             NSColor.black.withAlphaComponent(0.3).setFill()
@@ -322,8 +341,9 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             NSColor.black.setFill()
             NSBezierPath(rect: NSRect(x: x, y: 2, width: width * CGFloat(min(max(cell.fraction ?? 0, 0), 1)), height: 2)).fill()
         case .inline where cell.pair:
-            text(cell.bottom, line, right: right, y: 3)
-            text(cell.top, line, right: right - measure(cell.widest + " ", line), y: 3)
+            let slot = (width - measure(" ", line)) / 2
+            labeled(cell.top, line, left: x, right: x + slot, y: 3)
+            labeled(cell.bottom, line, left: right - slot, right: right, y: 3)
         case .inline:
             NSAttributedString(string: cell.top, attributes: small).draw(at: NSPoint(x: x, y: 6))
             text(cell.bottom, line, right: right, y: 3)
@@ -334,15 +354,15 @@ enum MenuMetric: String, CaseIterable, Identifiable {
             }
             text(cell.bottom, line, right: right, y: 3)
         case _ where cell.pair:
-            text(cell.top, value, right: right, y: 11)
-            text(cell.bottom, value, right: right, y: 0)
+            labeled(cell.top, value, left: x, right: right, y: upper)
+            labeled(cell.bottom, value, left: x, right: right, y: lower)
         case .gauge:
             gauge()
-            text(cell.top, small, right: right, y: 11)
-            text(cell.bottom, value, right: right, y: 0)
+            NSAttributedString(string: cell.top, attributes: small).draw(at: NSPoint(x: x + 7, y: upper))
+            text(cell.bottom, value, right: right, y: lower)
         default:
-            text(cell.top, small, right: right, y: 11)
-            text(cell.bottom, value, right: right, y: 0)
+            NSAttributedString(string: cell.top, attributes: small).draw(at: NSPoint(x: x, y: upper))
+            text(cell.bottom, value, right: right, y: lower)
         }
     }
 }
@@ -356,10 +376,12 @@ struct TrayLabel: View {
     @AppStorage(MenuMetric.fixedWidthKey) private var fixedWidth = false
     @AppStorage(MenuMetric.leadingKey) private var leading = 0.0
     @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
+    @AppStorage(MenuMetric.offsetKey) private var offset = 0.0
+    @AppStorage(MenuMetric.lineGapKey) private var lineGap = 0.0
 
     var body: some View {
-        let look = MenuLook(style: MenuStyle(rawValue: style) ?? .stacked, labels: labels, gap: gap,
-                            fixedWidth: fixedWidth, leading: leading, trailing: trailing)
+        let look = MenuLook(style: MenuStyle(rawValue: style) ?? .stacked, labels: labels, gap: gap, fixedWidth: fixedWidth,
+                            leading: leading, trailing: trailing, offset: offset, lineGap: lineGap)
         Image(nsImage: MenuMetric.image(MenuMetric.selected(stored), look: look, status: monitor.status, power: monitor.power))
     }
 }
@@ -401,6 +423,8 @@ struct MenuMetricsCard: View {
     @AppStorage(MenuMetric.fixedWidthKey) private var fixedWidth = false
     @AppStorage(MenuMetric.leadingKey) private var leading = 0.0
     @AppStorage(MenuMetric.trailingKey) private var trailing = 0.0
+    @AppStorage(MenuMetric.offsetKey) private var offset = 0.0
+    @AppStorage(MenuMetric.lineGapKey) private var lineGap = 0.0
 
     private var selected: [MenuMetric] { MenuMetric.selected(stored) }
 
@@ -424,6 +448,8 @@ struct MenuMetricsCard: View {
                         slider("値どうしの間隔", $gap, 2...24)
                         slider("左の余白", $leading, 0...12)
                         slider("右の余白", $trailing, 0...12)
+                        slider("上下の位置", $offset, -4...4)
+                        slider("行の間隔", $lineGap, -2...4)
                         HStack(spacing: 12) {
                             Text("更新の間隔").font(.system(size: 13)).frame(width: 96, alignment: .leading)
                             Picker("更新の間隔", selection: $interval) {
@@ -479,7 +505,7 @@ struct MenuMetricsCard: View {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
                 Text(option.title).font(.system(size: 13)).frame(width: 74, alignment: .leading)
                 Image(nsImage: MenuMetric.image(selected, look: MenuLook(style: option, labels: labels, gap: gap, fixedWidth: fixedWidth,
-                                                                         leading: leading, trailing: trailing),
+                                                                         leading: leading, trailing: trailing, offset: offset, lineGap: lineGap),
                                                 status: monitor.status, power: monitor.power))
                     .renderingMode(.template)
                 Spacer(minLength: 0)

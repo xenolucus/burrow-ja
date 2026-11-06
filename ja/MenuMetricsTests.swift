@@ -200,11 +200,14 @@ struct MenuMetricsTests {
         #expect(list != HideList.make(running: ["a", "b", "c", "self"], hidden: ["b", "quit"]))
     }
 
-    @Test func fittedCellsLeaveNoSpareWidth() {
-        let runtime = MenuMetric.Cell(top: "残り", bottom: "4.1h", widest: "88.8h").fitted()
-        #expect(runtime.widest == "4.1h")
-        let power = MenuMetric.Cell(top: "100W", bottom: "2W", widest: "188W", pair: true).fitted()
-        #expect(power.widest == "100W")
+    @Test func labelsKeepTheirPlaceForEverydayValues() {
+        let small = MenuMetric.Cell(top: "残り", bottom: "4.1h", widest: "88.8h", usual: "8.8h").fitted()
+        let large = MenuMetric.Cell(top: "残り", bottom: "9.9h", widest: "88.8h", usual: "8.8h").fitted()
+        #expect(small.widest == large.widest)
+        let long = MenuMetric.Cell(top: "残り", bottom: "12.5h", widest: "88.8h", usual: "8.8h").fitted()
+        #expect(long.widest == "12.5h")
+        let power = MenuMetric.Cell(top: "入 0W", bottom: "使 1W", widest: "使 188W", usual: "使 88W", pair: true)
+        #expect(power.withoutLabels().usual == "88W")
     }
 
     @Test func insetsWidenTheImage() throws {
