@@ -64,6 +64,65 @@ final class MenuGroupBar: NSObject {
     }
 }
 
+/// Lifts a menu bar item out of its screenshot: removes the wallpaper showing through the bar,
+/// turns dark glyphs light for the dark panel, and trims the empty sides.
+enum MenuIconCleaner {
+    private static let solid = 60, clear = 18
+
+    /// RGBA pixels of an opaque picture become premultiplied RGBA with a clear background.
+    static func clean(_ pixels: inout [UInt8], width: Int, height: Int) {
+        var glyph = 0, glyphCount = 0, backdrop = 0
+        for y in 0..<height {
+            let row = y * width * 4, last = row + (width - 1) * 4
+            // The bar is a vertical gradient, so each row has its own background.
+            let edge = (0..<3).map { (Int(pixels[row + $0]) + Int(pixels[last + $0])) / 2 }
+            backdrop += edge.reduce(0, +) / 3
+            for x in 0..<width {
+                let i = row + x * 4
+                let color = (0..<3).map { Int(pixels[i + $0]) }
+                let distance = (0..<3).map { abs(color[$0] - edge[$0]) }.max() ?? 0
+                let alpha = min(max(distance - clear, 0) * 255 / (solid - clear), 255)
+                for c in 0..<3 {
+                    pixels[i + c] = UInt8(min(max(color[c] - (255 - alpha) * edge[c] / 255, 0), alpha))
+                }
+                pixels[i + 3] = UInt8(alpha)
+                if alpha > 128 {
+                    glyph += color.reduce(0, +) / 3
+                    glyphCount += 1
+                }
+            }
+        }
+        guard glyphCount > 0, glyph / glyphCount < backdrop / max(height, 1) else { return }
+        for i in stride(from: 0, to: pixels.count, by: 4) {
+            let (r, g, b) = (Int(pixels[i]), Int(pixels[i + 1]), Int(pixels[i + 2]))
+            guard max(r, g, b) - min(r, g, b) < 40 else { continue }  // leave coloured badges alone
+            for c in 0..<3 { pixels[i + c] = UInt8(max(Int(pixels[i + 3]) - Int(pixels[i + c]), 0)) }
+        }
+    }
+
+    static func clean(_ image: CGImage, scale: CGFloat) -> NSImage? {
+        let width = image.width, height = image.height
+        var pixels = [UInt8](repeating: 0, count: width * height * 4)
+        let info = CGImageAlphaInfo.premultipliedLast.rawValue
+        let space = CGColorSpaceCreateDeviceRGB()
+        pixels.withUnsafeMutableBytes { raw in
+            CGContext(data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: space, bitmapInfo: info)?.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
+        }
+        clean(&pixels, width: width, height: height)
+        let columns = (0..<width).filter { x in (0..<height).contains { pixels[($0 * width + x) * 4 + 3] > 24 } }
+        let rows = (0..<height).filter { y in (0..<width).contains { pixels[(y * width + $0) * 4 + 3] > 24 } }
+        guard let left = columns.first, let right = columns.last, let top = rows.first, let bottom = rows.last else { return nil }
+        let result = pixels.withUnsafeMutableBytes { raw in
+            CGContext(data: raw.baseAddress, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                      space: space, bitmapInfo: info)?.makeImage()
+        }
+        let box = CGRect(x: left, y: top, width: right - left + 1, height: bottom - top + 1)
+        guard let trimmed = result?.cropping(to: box) else { return nil }
+        return NSImage(cgImage: trimmed, size: NSSize(width: box.width / scale, height: box.height / scale))
+    }
+}
+
 enum MenuHideError: LocalizedError {
     case unavailable
 
@@ -311,9 +370,12 @@ final class MenuHider: ObservableObject {
         for id in ids {
             let frame = await Task.detached(priority: .userInitiated) { Self.itemFrame(of: id) }.value
             guard let frame, let shot = try? await SCScreenshotManager.captureImage(in: frame) else { continue }
-            let image = NSImage(cgImage: shot, size: frame.size)
+            guard let image = MenuIconCleaner.clean(shot, scale: CGFloat(shot.width) / frame.width),
+                  let cleaned = image.cgImage(forProposedRect: nil, context: nil, hints: nil) else { continue }
             itemIcons[id] = image
-            try? NSBitmapImageRep(cgImage: shot).representation(using: .png, properties: [:])?.write(to: Self.iconFile(id), options: .atomic)
+            let file = NSBitmapImageRep(cgImage: cleaned)
+            file.size = image.size
+            try? file.representation(using: .png, properties: [:])?.write(to: Self.iconFile(id), options: .atomic)
         }
     }
 
@@ -444,7 +506,7 @@ struct MenuGroupView: View {
                         }
                         .frame(width: 60, height: 30).contentShape(Rectangle())
                     }
-                    .buttonStyle(.plain).help(app.name).accessibilityLabel(app.name)
+                    .buttonStyle(.plain).focusEffectDisabled().help(app.name).accessibilityLabel(app.name)
                 }
             }
             if !apps.isEmpty {

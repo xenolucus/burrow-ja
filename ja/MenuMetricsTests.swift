@@ -237,6 +237,22 @@ struct MenuMetricsTests {
         #expect(MenuGroup.load(saved: Data("bad".utf8), legacy: []).count == 1)
     }
 
+    @Test func iconCleanerRemovesTheBackground() {
+        // A 3 × 1 picture: light glyph on a mid-grey bar.
+        var light: [UInt8] = [120, 120, 120, 255, 250, 250, 250, 255, 120, 120, 120, 255]
+        MenuIconCleaner.clean(&light, width: 3, height: 1)
+        #expect(light[3] == 0 && light[11] == 0)
+        #expect(light[7] == 255 && light[4] > 200)
+        // A dark glyph turns light, because the panel is dark.
+        var dark: [UInt8] = [220, 220, 220, 255, 10, 10, 10, 255, 220, 220, 220, 255]
+        MenuIconCleaner.clean(&dark, width: 3, height: 1)
+        #expect(dark[7] == 255 && dark[4] > 200)
+        // A coloured badge keeps its colour.
+        var badge: [UInt8] = [220, 220, 220, 255, 10, 10, 10, 255, 220, 40, 40, 255, 220, 220, 220, 255]
+        MenuIconCleaner.clean(&badge, width: 4, height: 1)
+        #expect(badge[8] > badge[9])
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)
