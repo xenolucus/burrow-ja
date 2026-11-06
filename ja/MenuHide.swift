@@ -14,6 +14,55 @@ struct HideList: Equatable {
     }
 }
 
+/// One icon in the menu bar and the apps gathered under it.
+struct MenuGroup: Codable, Identifiable, Equatable {
+    static let symbols = ["square.grid.2x2", "folder", "tray.full", "star", "bolt", "briefcase",
+                          "gamecontroller", "paintbrush", "music.note", "message", "wrench.and.screwdriver", "ellipsis.circle"]
+
+    var id = UUID().uuidString
+    var name = "まとめ"
+    var symbol = symbols[0]
+    var apps: [String] = []
+
+    /// Saved groups, or one group holding what an older version hid.
+    static func load(saved: Data?, legacy: [String]) -> [MenuGroup] {
+        if let saved, let groups = try? JSONDecoder().decode([MenuGroup].self, from: saved), !groups.isEmpty { return groups }
+        return [MenuGroup(apps: legacy)]
+    }
+}
+
+/// The status items, made by hand because SwiftUI scenes cannot repeat at run time.
+@MainActor
+final class MenuGroupBar: NSObject {
+    private var items: [String: NSStatusItem] = [:]
+    private let popover = NSPopover()
+
+    func sync(_ groups: [MenuGroup]) {
+        for id in Set(items.keys).subtracting(groups.map(\.id)) {
+            items.removeValue(forKey: id).map(NSStatusBar.system.removeStatusItem)
+        }
+        for group in groups {
+            let item = items[group.id] ?? NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+            items[group.id] = item
+            item.button?.image = NSImage(systemSymbolName: group.symbol, accessibilityDescription: group.name)
+            item.button?.image?.isTemplate = true
+            item.button?.toolTip = group.name
+            item.button?.identifier = NSUserInterfaceItemIdentifier(group.id)
+            item.button?.target = self
+            item.button?.action = #selector(clicked)
+        }
+    }
+
+    @objc private func clicked(_ sender: NSStatusBarButton) {
+        if popover.isShown { return popover.performClose(nil) }
+        popover.behavior = .transient
+        popover.contentViewController = NSHostingController(rootView: MenuGroupView(groupID: sender.identifier?.rawValue ?? "") { [weak self] in
+            self?.popover.performClose(nil)
+        })
+        popover.show(relativeTo: sender.bounds, of: sender, preferredEdge: .minY)
+    }
+}
+
 enum MenuHideError: LocalizedError {
     case unavailable
 
@@ -72,11 +121,15 @@ final class MenuBarRestriction {
 final class MenuHider: ObservableObject {
     static let shared = MenuHider()
     private static let enabledKey = "experimentalMenuHide"
-    private static let hiddenKey = "menuHiddenApps"
+    private static let legacyHiddenKey = "menuHiddenApps"
+    private static let groupsKey = "menuGroups"
     private static let revealSeconds = 30
 
     @Published private(set) var enabled = UserDefaults.standard.bool(forKey: enabledKey)
-    @Published private(set) var hidden = Set(UserDefaults.standard.stringArray(forKey: hiddenKey) ?? [])
+    @Published private(set) var groups = MenuGroup.load(saved: UserDefaults.standard.data(forKey: groupsKey),
+                                                        legacy: UserDefaults.standard.stringArray(forKey: legacyHiddenKey) ?? [])
+    private let bar = MenuGroupBar()
+    var hidden: Set<String> { Set(groups.flatMap(\.apps)) }
     @Published private(set) var revealed = false
     @Published private(set) var problem: String?
 
@@ -159,6 +212,7 @@ final class MenuHider: ObservableObject {
             return
         }
         refreshApps()
+        bar.sync(groups)
         do {
             restriction = try restriction ?? MenuBarRestriction()
             watchApps()
@@ -172,14 +226,43 @@ final class MenuHider: ObservableObject {
         enabled = on
         UserDefaults.standard.set(on, forKey: Self.enabledKey)
         problem = nil
-        if on { start() } else { restriction?.release() }
+        if on {
+            start()
+        } else {
+            restriction?.release()
+            bar.sync([])
+        }
     }
 
-    func setHidden(_ id: String, _ on: Bool) {
-        if on { hidden.insert(id) } else { hidden.remove(id) }
-        UserDefaults.standard.set(hidden.sorted(), forKey: Self.hiddenKey)
+    private func save() {
+        UserDefaults.standard.set(try? JSONEncoder().encode(groups), forKey: Self.groupsKey)
+        if enabled { bar.sync(groups) }
         apply()
         refreshApps()
+    }
+
+    func addGroup() {
+        groups.append(MenuGroup(name: "まとめ \(groups.count + 1)"))
+        save()
+    }
+
+    /// Its apps return to the menu bar, and one group always remains.
+    func removeGroup(_ id: String) {
+        guard groups.count > 1 else { return }
+        groups.removeAll { $0.id == id }
+        save()
+    }
+
+    func updateGroup(_ id: String, _ change: (inout MenuGroup) -> Void) {
+        guard let index = groups.firstIndex(where: { $0.id == id }) else { return }
+        change(&groups[index])
+        save()
+    }
+
+    func setHidden(_ app: String, _ on: Bool, in group: String) {
+        for index in groups.indices { groups[index].apps.removeAll { $0 == app } }
+        if on, let index = groups.firstIndex(where: { $0.id == group }) { groups[index].apps.append(app) }
+        save()
     }
 
     /// Shows the real items for a moment, then hides them again by itself.
@@ -267,20 +350,26 @@ final class MenuHider: ObservableObject {
     }
 }
 
-/// The group icon's panel: every hidden app in one place.
+/// The panel under a group's icon.
 struct MenuGroupView: View {
+    let groupID: String
+    let close: () -> Void
     @ObservedObject private var hider = MenuHider.shared
-    @Environment(\.dismiss) private var dismiss
+
+    private var apps: [MenuHider.App] {
+        let ids = hider.groups.first { $0.id == groupID }?.apps ?? []
+        return hider.hiddenApps.filter { ids.contains($0.id) }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            if hider.hiddenApps.isEmpty {
-                Text("「設定」でアプリを隠すと、ここにまとまります。").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+            if apps.isEmpty {
+                Text("「設定」でこのまとめにアプリを追加します。").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
             }
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(64)), count: 4), spacing: 8) {
-                ForEach(hider.hiddenApps) { app in
+                ForEach(apps) { app in
                     Button {
-                        dismiss()
+                        close()
                         hider.press(app.id)
                     } label: {
                         VStack(spacing: 3) {
@@ -292,7 +381,7 @@ struct MenuGroupView: View {
                     .buttonStyle(.plain).help(app.name)
                 }
             }
-            if !hider.hiddenApps.isEmpty {
+            if !apps.isEmpty {
                 Button(hider.revealed ? "表示中" : "すべて30秒表示") { hider.reveal() }
                     .font(.system(size: 12)).buttonStyle(.link).disabled(hider.revealed)
             }
@@ -308,6 +397,42 @@ struct MenuGroupView: View {
 
 struct MenuHideCard: View {
     @ObservedObject private var hider = MenuHider.shared
+    @ViewState private var selectedID: String?
+
+    private var selected: MenuGroup? { hider.groups.first { $0.id == selectedID } ?? hider.groups.first }
+
+    private func groupEditor(_ group: MenuGroup) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(hider.groups) { item in
+                    Button { selectedID = item.id } label: {
+                        Label(item.name, systemImage: item.symbol).font(.system(size: 12)).lineLimit(1)
+                            .padding(.horizontal, 10).padding(.vertical, 5)
+                            .background(Capsule().fill(.white.opacity(item.id == group.id ? 0.2 : 0.06)))
+                    }
+                    .buttonStyle(.plain)
+                }
+                Button { hider.addGroup() } label: { Image(systemName: "plus") }
+                    .buttonStyle(.plain).accessibilityLabel("まとめを追加")
+                Spacer()
+                if hider.groups.count > 1 {
+                    Button("このまとめを削除") { hider.removeGroup(group.id) }.buttonStyle(.link).font(.system(size: 12))
+                }
+            }
+            HStack(spacing: 8) {
+                TextField("名前", text: Binding { group.name } set: { name in hider.updateGroup(group.id) { $0.name = name } })
+                    .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+                ForEach(MenuGroup.symbols, id: \.self) { symbol in
+                    Button { hider.updateGroup(group.id) { $0.symbol = symbol } } label: {
+                        Image(systemName: symbol).font(.system(size: 13)).frame(width: 26, height: 26)
+                            .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(symbol == group.symbol ? 0.22 : 0)))
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain).accessibilityLabel(symbol)
+                }
+            }
+        }
+    }
 
     private func section(_ title: String, _ apps: [MenuHider.App], action: String, empty: String,
                          run: @escaping (String) -> Void) -> some View {
@@ -341,7 +466,7 @@ struct MenuHideCard: View {
                     Toggle("オン", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
                         .labelsHidden().toggleStyle(.switch).controlSize(.small)
                 }
-                Text("選んだアプリの項目を隠し、四角いアイコンにまとめます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
+                Text("選んだアプリの項目を隠し、1つのアイコンにまとめます。まとめは複数作れます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
                 if let problem = hider.problem {
                     Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
                 }
@@ -353,8 +478,15 @@ struct MenuHideCard: View {
                             Button("許可する") { hider.askForAccessibility() }.buttonStyle(.pillSecondary)
                         }
                     }
-                    section("非表示中", hider.hiddenApps, action: "戻す", empty: "まだありません。") { hider.setHidden($0, false) }
-                    section("表示中", hider.shownApps, action: "隠す", empty: "隠せるアプリは見つかりませんでした。") { hider.setHidden($0, true) }
+                    if let group = selected {
+                        groupEditor(group)
+                        section("このまとめ", hider.hiddenApps.filter { group.apps.contains($0.id) }, action: "戻す", empty: "まだありません。") {
+                            hider.setHidden($0, false, in: group.id)
+                        }
+                        section("表示中", hider.shownApps, action: "まとめる", empty: "まとめられるアプリは見つかりませんでした。") {
+                            hider.setHidden($0, true, in: group.id)
+                        }
+                    }
                     Text("macOS の項目（Wi-Fi、コントロールセンターなど）は対象外です。").caption()
                 }
             }

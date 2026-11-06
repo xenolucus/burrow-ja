@@ -228,6 +228,15 @@ struct MenuMetricsTests {
         #expect(MenuHider.stillHidden(["a", "b"], passing: nil) == ["a", "b"])
     }
 
+    @Test func groupsKeepOlderHiddenApps() throws {
+        let moved = MenuGroup.load(saved: nil, legacy: ["a"])
+        #expect(moved.count == 1 && moved[0].apps == ["a"])
+        let saved = [MenuGroup(name: "x", symbol: "star", apps: ["b"]), MenuGroup(name: "y")]
+        let data = try JSONEncoder().encode(saved)
+        #expect(MenuGroup.load(saved: data, legacy: ["a"]) == saved)
+        #expect(MenuGroup.load(saved: Data("bad".utf8), legacy: []).count == 1)
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.network, .cpu])
         #expect(MenuMetric.selected("").isEmpty)
