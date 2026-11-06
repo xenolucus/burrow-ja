@@ -37,7 +37,7 @@ enum TotalsStore {
     static func sync() async -> [TotalRecord] {
         let current = load()
         guard let history = try? await Mole.json(HistoryResult.self, ["history", "--json", "--limit", "200"]) else { return current }
-        let records = merged(current, with: history.sessions)
+        let records = merged(current, with: history.sessions ?? [])
         if records != current { save(records) }
         return records
     }
