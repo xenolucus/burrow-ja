@@ -228,6 +228,15 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func pagesCycleThroughEveryGroupAndAll() {
+        let groups = [MenuGroup(id: "1"), MenuGroup(id: "2")]
+        #expect(MenuHider.nextPage(after: nil, groups: groups) == "1")
+        #expect(MenuHider.nextPage(after: "1", groups: groups) == "2")
+        #expect(MenuHider.nextPage(after: "2", groups: groups) == MenuHider.allPage)
+        #expect(MenuHider.nextPage(after: MenuHider.allPage, groups: groups) == "1")
+        #expect(MenuHider.stillHidden([MenuGroup(id: "1", apps: ["a"])], expanded: [MenuHider.allPage], passing: nil).isEmpty)
+    }
+
     @Test func openingAGroupShowsOnlyItsApps() {
         let one = MenuGroup(id: "1", apps: ["a", "b"]), two = MenuGroup(id: "2", apps: ["c"])
         #expect(MenuHider.stillHidden([one, two], expanded: [], passing: nil) == ["a", "b", "c"])

@@ -1,4 +1,5 @@
 import AppKit
+import Carbon.HIToolbox
 import ScreenCaptureKit
 import SwiftUI
 
@@ -64,7 +65,7 @@ final class MenuGroupBar: NSObject {
     @objc private func clicked(_ sender: NSStatusBarButton) {
         if NSApp.currentEvent?.type != .rightMouseUp {
             popover.performClose(nil)
-            MenuHider.shared.toggleGroup(sender.identifier?.rawValue ?? "")
+            MenuHider.shared.groupClicked(sender.identifier?.rawValue ?? "")
             return
         }
         if popover.isShown { return popover.performClose(nil) }
@@ -135,6 +136,42 @@ enum MenuIconCleaner {
     }
 }
 
+/// System-wide shortcuts. macOS calls back on a key press, so nothing runs while waiting.
+/// ⌃⌥⌘M moves to the next page; ⌃⌥⌘1 to 9 open a page directly.
+enum MenuHotKeys {
+    private static let digits = [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4, kVK_ANSI_5, kVK_ANSI_6, kVK_ANSI_7, kVK_ANSI_8, kVK_ANSI_9]
+    nonisolated(unsafe) private static var registered: [EventHotKeyRef] = []
+    nonisolated(unsafe) private static var handler: EventHandlerRef?
+
+    static func install() {
+        guard registered.isEmpty else { return }
+        if handler == nil {
+            var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
+            InstallEventHandler(GetApplicationEventTarget(), { _, event, _ in
+                var key = EventHotKeyID()
+                GetEventParameter(event, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil,
+                                  MemoryLayout<EventHotKeyID>.size, nil, &key)
+                let number = Int(key.id)
+                DispatchQueue.main.async { MainActor.assumeIsolated { MenuHider.shared.hotKey(number) } }
+                return noErr
+            }, 1, &type, nil, &handler)
+        }
+        for (number, code) in ([kVK_ANSI_M] + digits).enumerated() {
+            var reference: EventHotKeyRef?
+            let key = EventHotKeyID(signature: OSType(0x424A4153), id: UInt32(number))
+            if RegisterEventHotKey(UInt32(code), UInt32(controlKey | optionKey | cmdKey), key, GetApplicationEventTarget(), 0, &reference) == noErr,
+               let reference {
+                registered.append(reference)
+            }
+        }
+    }
+
+    static func remove() {
+        registered.forEach { UnregisterEventHotKey($0) }
+        registered = []
+    }
+}
+
 enum MenuHideError: LocalizedError {
     case unavailable
 
@@ -194,6 +231,11 @@ final class MenuHider: ObservableObject {
     static let shared = MenuHider()
     private static let enabledKey = "experimentalMenuHide"
     private static let legacyHiddenKey = "menuHiddenApps"
+    static let pageModeKey = "menuPageMode"
+    static let hotKeysKey = "menuHotKeys"
+    private static let pageKey = "menuCurrentPage"
+    /// The page that shows every item.
+    nonisolated static let allPage = "all"
     private static let groupsKey = "menuGroups"
     private static let revealSeconds = 30
 
@@ -296,10 +338,12 @@ final class MenuHider: ObservableObject {
         }
         refreshApps()
         bar.sync(groups)
+        if UserDefaults.standard.bool(forKey: Self.hotKeysKey) { MenuHotKeys.install() }
         do {
             restriction = try restriction ?? MenuBarRestriction()
             watchApps()
             apply()
+            restorePage()
         } catch {
             problem = error.localizedDescription
         }
@@ -314,6 +358,7 @@ final class MenuHider: ObservableObject {
         } else {
             restriction?.release()
             bar.sync([])
+            MenuHotKeys.remove()
         }
     }
 
@@ -333,6 +378,7 @@ final class MenuHider: ObservableObject {
     func removeGroup(_ id: String) {
         guard groups.count > 1 else { return }
         groups.removeAll { $0.id == id }
+        if pageMode, expanded.contains(id) { expanded = [Self.allPage] }
         save()
     }
 
@@ -366,22 +412,69 @@ final class MenuHider: ObservableObject {
         }
     }
 
-    func toggleGroup(_ id: String) {
-        if expanded.remove(id) == nil { expanded.insert(id) }
+    private var pageMode: Bool { UserDefaults.standard.bool(forKey: Self.pageModeKey) }
+
+    /// Page order: every group, then the page that shows everything.
+    nonisolated static func nextPage(after current: String?, groups: [MenuGroup]) -> String {
+        let pages = groups.map(\.id) + [allPage]
+        guard let current, let index = pages.firstIndex(of: current) else { return pages[0] }
+        return pages[(index + 1) % pages.count]
+    }
+
+    func groupClicked(_ id: String) {
+        pageMode ? showPage(expanded.contains(id) ? Self.allPage : id) : toggleGroup(id)
+    }
+
+    func hotKey(_ number: Int) {
+        guard enabled else { return }
+        if number == 0 { return showPage(Self.nextPage(after: expanded.first, groups: groups)) }
+        if groups.indices.contains(number - 1) { showPage(groups[number - 1].id) }
+    }
+
+    func showPage(_ id: String) {
+        guard pageMode else { return toggleGroup(id) }
+        collapseTask?.cancel()
+        expanded = [id]
+        UserDefaults.standard.set(id, forKey: Self.pageKey)
+        expansionChanged(opened: true)
+    }
+
+    /// Back to where the user left off, after a launch or switching the mode.
+    func restorePage() {
+        if pageMode, let page = UserDefaults.standard.string(forKey: Self.pageKey),
+           page == Self.allPage || groups.contains(where: { $0.id == page }) { showPage(page) }
+    }
+
+    func setPageMode(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.pageModeKey)
+        expanded = []
+        if on { showPage(groups.first?.id ?? Self.allPage) } else { expansionChanged(opened: false) }
+    }
+
+    func setHotKeys(_ on: Bool) {
+        UserDefaults.standard.set(on, forKey: Self.hotKeysKey)
+        on ? MenuHotKeys.install() : MenuHotKeys.remove()
+    }
+
+    private func expansionChanged(opened: Bool) {
         makingRoom = false
         bar.sync(groups, expanded: expanded)
         apply()
         roomTask?.cancel()
-        if expanded.contains(id) {
-            roomTask = Task {
-                // MenuBarAgent animates the new layout for about a second before it folds anything.
-                try? await Task.sleep(for: .milliseconds(1200))
-                let folded = await Task.detached(priority: .userInitiated) { Self.menuBarOverflows() }.value
-                guard folded, !Task.isCancelled else { return }
-                makingRoom = true
-                apply()
-            }
+        guard opened else { return }
+        roomTask = Task {
+            // MenuBarAgent animates the new layout for about a second before it folds anything.
+            try? await Task.sleep(for: .milliseconds(1200))
+            let folded = await Task.detached(priority: .userInitiated) { Self.menuBarOverflows() }.value
+            guard folded, !Task.isCancelled else { return }
+            makingRoom = true
+            apply()
         }
+    }
+
+    func toggleGroup(_ id: String) {
+        if expanded.remove(id) == nil { expanded.insert(id) }
+        expansionChanged(opened: expanded.contains(id))
         collapseTask?.cancel()
         let stored = UserDefaults.standard.object(forKey: Self.collapseKey) as? Int ?? Self.defaultCollapse
         guard stored > 0, !expanded.isEmpty else { return }
@@ -524,6 +617,7 @@ final class MenuHider: ObservableObject {
 
     /// What stays hidden once `passing` and the opened groups' apps are let through.
     nonisolated static func stillHidden(_ groups: [MenuGroup], expanded: Set<String>, passing: String?) -> Set<String> {
+        guard !expanded.contains(allPage) else { return [] }
         let opened = groups.filter { expanded.contains($0.id) }.flatMap(\.apps)
         return Set(groups.flatMap(\.apps)).subtracting(opened + [passing].compactMap { $0 })
     }
@@ -613,6 +707,8 @@ struct MenuHideCard: View {
     @ObservedObject private var hider = MenuHider.shared
     @ViewState private var selectedID: String?
     @AppStorage(MenuHider.collapseKey) private var collapse = MenuHider.defaultCollapse
+    @AppStorage(MenuHider.pageModeKey) private var pageMode = false
+    @AppStorage(MenuHider.hotKeysKey) private var hotKeys = false
 
     private var selected: MenuGroup? { hider.groups.first { $0.id == selectedID } ?? hider.groups.first }
 
@@ -688,12 +784,24 @@ struct MenuHideCard: View {
                             Button("許可する") { hider.askForAccessibility() }.buttonStyle(.pillSecondary)
                         }
                     }
-                    HStack(spacing: 12) {
-                        Text("自動で隠すまで").font(.system(size: 13))
-                        Picker("自動で隠すまで", selection: $collapse) {
-                            ForEach([5, 15, 30, 0], id: \.self) { Text($0 == 0 ? "隠さない" : "\($0)秒").tag($0) }
+                    Toggle("ページとして切り替える（1つずつ表示）", isOn: Binding { pageMode } set: { pageMode = $0; hider.setPageMode($0) })
+                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                    Toggle("ショートカット（⌃⌥⌘M で次へ、⌃⌥⌘1〜9 で直接）", isOn: Binding { hotKeys } set: { hotKeys = $0; hider.setHotKeys($0) })
+                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                    if pageMode {
+                        Picker("ページ", selection: Binding { hider.expanded.first ?? MenuHider.allPage } set: { hider.showPage($0) }) {
+                            ForEach(hider.groups) { Text($0.name).tag($0.id) }
+                            Text("全部表示").tag(MenuHider.allPage)
                         }
-                        .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 280)
+                        .pickerStyle(.segmented).labelsHidden()
+                    } else {
+                        HStack(spacing: 12) {
+                            Text("自動で隠すまで").font(.system(size: 13))
+                            Picker("自動で隠すまで", selection: $collapse) {
+                                ForEach([5, 15, 30, 0], id: \.self) { Text($0 == 0 ? "隠さない" : "\($0)秒").tag($0) }
+                            }
+                            .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 280)
+                        }
                     }
                     if let group = selected {
                         groupEditor(group)
