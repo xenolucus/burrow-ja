@@ -31,7 +31,13 @@ struct ExternalCache: Identifiable, Hashable {
     let path: String
     let kind: String
     let bytes: Int64
+    /// Mac metadata on the whole volume, removed by Mole rather than moved to the Trash.
+    var byMole = false
     var id: String { path }
+
+    static func split(_ chosen: [ExternalCache]) -> (trash: [String], mole: [String]) {
+        (chosen.filter { !$0.byMole }.map(\.path), chosen.filter(\.byMole).map(\.path))
+    }
 }
 
 enum ExternalCacheScanner {
@@ -93,6 +99,8 @@ struct ExternalCleanCard: View {
     @AppStorage(ExternalDrives.enabledKey) private var enabled = false
     @ViewState private var drives: [URL] = []
     @ViewState private var scanning: URL?
+    /// The drive the list below belongs to; only its clean button is live.
+    @ViewState private var scanned: URL?
     @ViewState private var caches: [ExternalCache]?
     @ViewState private var selected = Set<String>()
     @ViewState private var failed = 0
@@ -105,9 +113,9 @@ struct ExternalCleanCard: View {
             GlowCard(glow: .ember, style: .rim, padding: 22) {
                 VStack(alignment: .leading, spacing: 12) {
                     Text("外付けドライブ（試験的）").cardTitle()
-                    Text("「キャッシュを探す」はアプリのキャッシュを一覧にします。「不要ファイルを削除」は Mac が作る .DS_Store などを Mole が削除します。自分のファイルとゴミ箱には触れません。").caption()
+                    Text("アプリのキャッシュと、Mac が作る .DS_Store などを探します。選んだものだけ整理します。自分のファイルとゴミ箱には触れません。").caption()
                     if ExternalDrives.finderMetadataProtected {
-                        Text("保護パスに FINDER_METADATA があるため、不要ファイルはほとんど見つかりません。").caption()
+                        Text("保護パスに FINDER_METADATA があるため、.DS_Store などはほとんど見つかりません。").caption()
                     }
                     if drives.isEmpty {
                         Text("外付けドライブは接続されていません。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
@@ -116,9 +124,9 @@ struct ExternalCleanCard: View {
                         HStack {
                             Text(drive.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
                             Spacer()
-                            Button("キャッシュを探す") { find(drive) }.buttonStyle(.pillSecondary).disabled(scanning != nil)
-                            Button("プレビュー") { run(drive, preview: true) }.buttonStyle(.pillSecondary)
-                            Button("不要ファイルを削除") { ask(drive) }.buttonStyle(.pill)
+                            Button("プレビュー") { find(drive) }.buttonStyle(.pillSecondary).disabled(scanning != nil)
+                            Button("今すぐクリーン") { askClean() }.buttonStyle(.pill)
+                                .disabled(scanned != drive || selected.isEmpty)
                         }
                     }
                     if let scanning {
@@ -129,13 +137,13 @@ struct ExternalCleanCard: View {
             }
             .onAppear { drives = ExternalDrives.mounted() }
             .onReceive(mounts) { _ in drives = ExternalDrives.mounted() }
-            .onReceive(unmounts) { _ in drives = ExternalDrives.mounted(); caches = nil; selected = [] }
+            .onReceive(unmounts) { _ in drives = ExternalDrives.mounted(); caches = nil; scanned = nil; selected = [] }
         }
     }
 
     @ViewBuilder private func results(_ caches: [ExternalCache]) -> some View {
         if caches.isEmpty {
-            Text("既知のキャッシュは見つかりませんでした。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+            Text("整理できるものは見つかりませんでした。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
         }
         ForEach(caches) { cache in
             HStack {
@@ -148,15 +156,17 @@ struct ExternalCleanCard: View {
                 .toggleStyle(.checkbox)
                 Spacer()
                 Text(cache.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                Button("Finder で表示") { NSWorkspace.shared.selectFile(cache.path, inFileViewerRootedAtPath: "") }
-                    .buttonStyle(.link).font(.system(size: 12))
+                if !cache.byMole {
+                    Button("Finder で表示") { NSWorkspace.shared.selectFile(cache.path, inFileViewerRootedAtPath: "") }
+                        .buttonStyle(.link).font(.system(size: 12))
+                }
             }
         }
         if failed > 0 {
             Text("\(failed) 項目をゴミ箱に入れられませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
         }
-        if !selected.isEmpty {
-            Button("選択した \(selected.count) 項目をゴミ箱に入れる") { askTrash() }.buttonStyle(.pill)
+        if !caches.isEmpty, selected.isEmpty {
+            Text("消すものを選ぶと「今すぐクリーン」を押せます。").caption()
         }
     }
 
@@ -170,38 +180,40 @@ struct ExternalCleanCard: View {
 
     private func find(_ drive: URL) {
         scanning = drive
+        scanned = drive
         caches = nil
         selected = []
         failed = 0
         Task {
-            let found = await Task.detached(priority: .utility) { ExternalCacheScanner.scan(drive) }.value
+            var found = await Task.detached(priority: .utility) { ExternalCacheScanner.scan(drive) }.value
+            // shortcut: a failed Mole preview just hides this row, the caches above still work.
+            if let data = try? await Mole.capture(["clean", "--external", drive.path, "--dry-run"]) {
+                let bytes = SectionReport.parse(String(decoding: data, as: UTF8.self)).total
+                if bytes > 0 {
+                    found.append(.init(path: drive.path, kind: "Mac の不要ファイル（.DS_Store など）", bytes: bytes, byMole: true))
+                }
+            }
             caches = found
             scanning = nil
         }
     }
 
-    private func askTrash() {
-        let chosen = Array(selected)
-        let bytes = (caches ?? []).filter { selected.contains($0.path) }.map(\.bytes).reduce(0, +)
-        confirm = .init(title: "\(chosen.count) 項目をゴミ箱に入れますか？",
-                        message: "\(bytes.bytesText)。アプリを使うと再作成されます。空き容量が増えるのは、ゴミ箱を空にしたあとです。",
-                        button: "ゴミ箱に入れる") {
-            let left = Trash.move(chosen)
+    private func askClean() {
+        let chosen = (caches ?? []).filter { selected.contains($0.path) }
+        let plan = ExternalCache.split(chosen)
+        let bytes = chosen.map(\.bytes).reduce(0, +).bytesText
+        var message = bytes + "。"
+        if !plan.trash.isEmpty { message += "キャッシュはゴミ箱に移動します。空き容量が増えるのは、ゴミ箱を空にしたあとです。" }
+        if !plan.mole.isEmpty { message += "Mac の不要ファイルは Mole が完全に削除します。" }
+        confirm = .init(title: "\(chosen.count) 項目をクリーンしますか？", message: message, button: "クリーン") {
+            let left = Trash.move(plan.trash)
             failed = left.count
-            caches = caches?.filter { !chosen.contains($0.path) || left.contains($0.path) }
+            caches = caches?.filter { !selected.contains($0.path) || left.contains($0.path) }
             selected = []
+            if let volume = plan.mole.first {
+                model.run("Mac の不要ファイルを削除しています", ["clean", "--external", volume])
+            }
         }
-    }
-
-    private func run(_ drive: URL, preview: Bool) {
-        model.run("\(drive.lastPathComponent) を\(preview ? "プレビュー" : "クリーン")しています",
-                  ["clean", "--external", drive.path] + (preview ? ["--dry-run"] : []))
-    }
-
-    private func ask(_ drive: URL) {
-        confirm = .init(title: "\(drive.lastPathComponent) の不要ファイルを削除しますか？",
-                        message: "試験的な機能です。先にプレビューで内容を確認してください。",
-                        button: "削除") { run(drive, preview: false) }
     }
 }
 

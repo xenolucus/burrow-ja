@@ -102,6 +102,15 @@ struct MenuMetricsTests {
         #expect(ExternalCacheScanner.scan(root, minBytes: 1_000_000).isEmpty)
     }
 
+    @Test func cleaningGoesToTheRightPlace() {
+        let plan = ExternalCache.split([
+            .init(path: "/Volumes/SSD/Media Cache", kind: "", bytes: 1),
+            .init(path: "/Volumes/SSD", kind: "", bytes: 1, byMole: true),
+        ])
+        #expect(plan.trash == ["/Volumes/SSD/Media Cache"])
+        #expect(plan.mole == ["/Volumes/SSD"])
+    }
+
     @Test func keepsOnlyKnownMetrics() {
         #expect(MenuMetric.selected("network,nope,cpu") == [.cpu, .network])
         #expect(MenuMetric.selected("").isEmpty)
