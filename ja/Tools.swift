@@ -162,6 +162,58 @@ private final class CoverWindow: NSWindow {
     override var canBecomeKey: Bool { true }
 }
 
+/// What the monitor check shows, in order.
+enum MonitorPattern: CaseIterable {
+    case white, black, red, green, blue, cyan, magenta, yellow, ramps, steps, nearBlack, nearWhite, grid, motion
+
+    var name: String {
+        switch self {
+        case .white: "白 (255, 255, 255)"
+        case .black: "黒 (0, 0, 0)"
+        case .red: "赤 (255, 0, 0)"
+        case .green: "緑 (0, 255, 0)"
+        case .blue: "青 (0, 0, 255)"
+        case .cyan: "シアン (0, 255, 255)"
+        case .magenta: "マゼンタ (255, 0, 255)"
+        case .yellow: "黄 (255, 255, 0)"
+        case .ramps: "グラデーション（段差が見えなければ滑らか）"
+        case .steps: "32 段階（隣どうしの区別がつくか）"
+        case .nearBlack: "黒の限界（0〜20 のうち見える段まで）"
+        case .nearWhite: "白の限界（235〜255 のうち見える段まで）"
+        case .grid: "格子（ピントとゆがみ）"
+        case .motion: "動きとフレームレート"
+        }
+    }
+
+    /// 0...1 per channel for the solid colors.
+    var rgb: (Double, Double, Double)? {
+        switch self {
+        case .white: (1, 1, 1)
+        case .black: (0, 0, 0)
+        case .red: (1, 0, 0)
+        case .green: (0, 1, 0)
+        case .blue: (0, 0, 1)
+        case .cyan: (0, 1, 1)
+        case .magenta: (1, 0, 1)
+        case .yellow: (1, 1, 0)
+        default: nil
+        }
+    }
+}
+
+/// Frames drawn in the last second, counted from the display's own redraws.
+final class FrameMeter {
+    private var times: [TimeInterval] = []
+    private(set) var count = 0
+
+    func tick(_ time: TimeInterval) -> Int {
+        count += 1
+        times.append(time)
+        times.removeAll { time - $0 > 1 }
+        return times.count
+    }
+}
+
 /// Screen wiping, keyboard cleaning and the monitor check all take over the screen, one at a time.
 @MainActor final class Cover: ObservableObject {
     static let shared = Cover()
@@ -170,13 +222,15 @@ private final class CoverWindow: NSWindow {
     @Published private(set) var mode: Mode?
     @Published var pattern = 0
     @Published private(set) var secondsLeft = 0
+    /// Display P3 instead of sRGB: shows how far past sRGB the screen reaches.
+    @Published var wide = false
+    @Published private(set) var screenInfo = ""
     private var windows: [NSWindow] = []
     private var monitor: Any?
     private var escapes = 0
     private var timer: Task<Void, Never>?
 
-    static let patterns: [(String, Color?)] = [("白", .white), ("黒", .black), ("赤", .red), ("緑", .green), ("青", .blue),
-                                               ("灰色", .gray), ("グラデーション", nil), ("格子", nil)]
+    static let patterns = MonitorPattern.allCases
     static let keyboardSeconds = 60
 
     func start(_ mode: Mode) {
@@ -185,6 +239,11 @@ private final class CoverWindow: NSWindow {
         pattern = 0
         escapes = 0
         let screens: [NSScreen]
+        if case .monitor(let index) = mode, NSScreen.screens.indices.contains(index) {
+            let screen = NSScreen.screens[index], scale = screen.backingScaleFactor
+            screenInfo = "\(screen.localizedName) · \(Int(screen.frame.width * scale))×\(Int(screen.frame.height * scale)) · 最大 \(screen.maximumFramesPerSecond) Hz"
+                + (screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1 ? " · HDR 対応" : "")
+        }
         switch mode {
         case .monitor(let index): screens = NSScreen.screens.indices.contains(index) ? [NSScreen.screens[index]] : []
         case .keyboard: screens = NSScreen.main.map { [$0] } ?? []
@@ -242,6 +301,7 @@ private final class CoverWindow: NSWindow {
             if escapes >= 2 { stop() }
         case .monitor:
             if event.type == .keyDown, event.keyCode == 53 { return stop() }
+            if event.type == .keyDown, event.keyCode == 35 { return wide.toggle() }  // P
             let back = event.type == .keyDown && event.keyCode == 123
             pattern = (pattern + (back ? Self.patterns.count - 1 : 1)) % Self.patterns.count
         default:
@@ -256,7 +316,7 @@ private struct CoverView: View {
     var body: some View {
         ZStack {
             switch cover.mode {
-            case .monitor: pattern(cover.pattern)
+            case .monitor: pattern(Cover.patterns[cover.pattern])
             default: Color.black
             }
             VStack(spacing: 14) {
@@ -269,8 +329,11 @@ private struct CoverView: View {
                     Text("キーは入力されません。あと \(cover.secondsLeft) 秒で自動で終わります。").foregroundStyle(.white.opacity(0.7))
                     Button("終了する") { cover.stop() }.buttonStyle(.pill).padding(.top, 8)
                 case .monitor:
-                    Text("\(Cover.patterns[cover.pattern].0)　クリックか → で次へ、← で前へ、Esc で終了")
-                        .font(.system(size: 12)).padding(6).background(.black.opacity(0.5)).foregroundStyle(.white)
+                    VStack(spacing: 2) {
+                        Text("\(cover.pattern + 1)/\(Cover.patterns.count)　\(Cover.patterns[cover.pattern].name)　色空間: \(cover.wide ? "Display P3" : "sRGB")")
+                        Text("\(cover.screenInfo)　クリックか → で次へ、← で前へ、P で色空間、Esc で終了")
+                    }
+                    .font(.system(size: 12)).padding(6).background(.black.opacity(0.6)).foregroundStyle(.white)
                 case nil:
                     EmptyView()
                 }
@@ -281,21 +344,96 @@ private struct CoverView: View {
         .ignoresSafeArea()
     }
 
-    @ViewBuilder private func pattern(_ index: Int) -> some View {
-        if let color = Cover.patterns[index].1 {
-            color
-        } else if index == 6 {
-            LinearGradient(colors: [.black, .white], startPoint: .leading, endPoint: .trailing)
+    private func color(_ red: Double, _ green: Double, _ blue: Double) -> Color {
+        Color(cover.wide ? .displayP3 : .sRGB, red: red, green: green, blue: blue)
+    }
+
+    /// One row per channel: gray, red, green, blue.
+    private var channels: [(Double, Double, Double)] { [(1, 1, 1), (1, 0, 0), (0, 1, 0), (0, 0, 1)] }
+
+    @ViewBuilder private func pattern(_ pattern: MonitorPattern) -> some View {
+        if let rgb = pattern.rgb {
+            color(rgb.0, rgb.1, rgb.2)
         } else {
+            switch pattern {
+            case .ramps:
+                VStack(spacing: 0) {
+                    ForEach(channels.indices, id: \.self) { row in
+                        let (red, green, blue) = channels[row]
+                        LinearGradient(colors: [color(0, 0, 0), color(red, green, blue)], startPoint: .leading, endPoint: .trailing)
+                    }
+                }
+            case .steps:
+                VStack(spacing: 0) {
+                    ForEach(channels.indices, id: \.self) { row in
+                        let (red, green, blue) = channels[row]
+                        HStack(spacing: 0) {
+                            ForEach(0..<32, id: \.self) { step in
+                                let level = Double(step) / 31
+                                color(red * level, green * level, blue * level)
+                            }
+                        }
+                    }
+                }
+            case .nearBlack, .nearWhite:
+                let base = pattern == .nearBlack ? 0 : 235
+                ZStack {
+                    pattern == .nearBlack ? Color.black : color(1, 1, 1)
+                    HStack(spacing: 0) {
+                        ForEach(0...20, id: \.self) { step in
+                            let level = Double(base + step) / 255
+                            ZStack(alignment: .bottom) {
+                                color(level, level, level)
+                                Text("\(base + step)").font(.system(size: 11)).padding(.bottom, 90)
+                                    .foregroundStyle(pattern == .nearBlack ? .white.opacity(0.5) : .black.opacity(0.5))
+                            }
+                        }
+                    }
+                    .frame(height: 320)
+                }
+            case .motion:
+                MotionTest()
+            default:
+                Canvas { context, size in
+                    context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
+                    var lines = Path()
+                    for x in stride(from: 0, through: size.width, by: 50) { lines.addRect(CGRect(x: x, y: 0, width: 1, height: size.height)) }
+                    for y in stride(from: 0, through: size.height, by: 50) { lines.addRect(CGRect(x: 0, y: y, width: size.width, height: 1)) }
+                    context.fill(lines, with: .color(.white))
+                    context.stroke(Path(ellipseIn: CGRect(x: size.width / 2 - size.height / 3, y: size.height / 6,
+                                                          width: size.height * 2 / 3, height: size.height * 2 / 3)),
+                                   with: .color(.white), lineWidth: 2)
+                }
+            }
+        }
+    }
+}
+
+/// Blocks moving at three speeds, a lamp that steps once per frame, and the measured frame rate.
+private struct MotionTest: View {
+    @State private var meter = FrameMeter()
+
+    var body: some View {
+        TimelineView(.animation) { timeline in
             Canvas { context, size in
-                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
-                var lines = Path()
-                for x in stride(from: 0, through: size.width, by: 50) { lines.addRect(CGRect(x: x, y: 0, width: 1, height: size.height)) }
-                for y in stride(from: 0, through: size.height, by: 50) { lines.addRect(CGRect(x: 0, y: y, width: size.width, height: 1)) }
-                context.fill(lines, with: .color(.white))
-                context.stroke(Path(ellipseIn: CGRect(x: size.width / 2 - size.height / 3, y: size.height / 6,
-                                                      width: size.height * 2 / 3, height: size.height * 2 / 3)),
-                               with: .color(.white), lineWidth: 2)
+                let time = timeline.date.timeIntervalSinceReferenceDate
+                let fps = meter.tick(time)
+                context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(Color(white: 0.15)))
+                for (row, speed) in [480.0, 960.0, 1920.0].enumerated() {
+                    let y = size.height * (0.25 + 0.17 * Double(row))
+                    let x = (time * speed).truncatingRemainder(dividingBy: size.width + 120) - 120
+                    context.fill(Path(CGRect(x: x, y: y, width: 120, height: 90)), with: .color(.white))
+                    context.draw(Text("\(Int(speed)) px/秒").font(.system(size: 13)).foregroundStyle(.white.opacity(0.6)),
+                                 at: CGPoint(x: 70, y: y - 14))
+                }
+                // A skipped frame leaves one lamp dark when photographed.
+                for lamp in 0..<8 {
+                    let lit = meter.count % 8 == lamp
+                    context.fill(Path(CGRect(x: size.width / 2 - 160 + Double(lamp) * 40, y: size.height * 0.82, width: 32, height: 32)),
+                                 with: .color(lit ? .white : Color(white: 0.3)))
+                }
+                context.draw(Text("実測 \(fps) fps").font(.system(size: 40, weight: .bold)).foregroundStyle(.white),
+                             at: CGPoint(x: size.width / 2, y: size.height * 0.12))
             }
         }
     }
@@ -403,7 +541,7 @@ struct ToolsPage: View {
         GlowCard(glow: .violet, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("モニターのチェック", systemImage: "display").cardTitle()
-                Text("単色、グラデーション、格子を順に表示します。ドット抜けや色むら、プロジェクターのピントと台形のゆがみを確かめられます。").caption()
+                Text("RGB の各色を 100% で表示し、グラデーション、黒と白の限界、格子、動きとフレームレートを順に確かめます。P で sRGB と Display P3 を切り替えます。").caption()
                 HStack {
                     Picker("画面", selection: $screen) {
                         ForEach(NSScreen.screens.indices, id: \.self) { Text(NSScreen.screens[$0].localizedName).tag($0) }

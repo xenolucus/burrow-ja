@@ -229,6 +229,13 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func frameMeterCountsTheLastSecond() {
+        let meter = FrameMeter()
+        for frame in 0..<120 { _ = meter.tick(Double(frame) / 60) }
+        #expect(meter.tick(2) == 61 && meter.count == 121)
+        #expect(MonitorPattern.allCases.compactMap(\.rgb).count == 8)
+    }
+
     @Test func smcLayoutAndNumbersMatchTheKernel() {
         #expect(MemoryLayout<SMC.KeyData>.stride == 80)
         #expect(SMC.code("FNum") == 0x464E_756D)
