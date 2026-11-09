@@ -229,6 +229,15 @@ struct MenuMetricsTests {
         #expect(list == ["hidden", "a"])
     }
 
+    @Test func smcLayoutAndNumbersMatchTheKernel() {
+        #expect(MemoryLayout<SMC.KeyData>.stride == 80)
+        #expect(SMC.code("FNum") == 0x464E_756D)
+        #expect(SMC.number(type: SMC.code("flt "), bytes: [0x00, 0x00, 0xFA, 0x44]) == 2000)
+        #expect(SMC.number(type: SMC.code("ui8 "), bytes: [2]) == 2)
+        #expect(SMC.number(type: SMC.code("fpe2"), bytes: [0x1F, 0x40]) == 2000)
+        #expect(SMC.number(type: SMC.code("xyz "), bytes: [1, 2, 3, 4]) == nil)
+    }
+
     @Test func menuTweaksSurviveSavingAndDropDefaults() {
         var tweak = MenuTweak()
         tweak.symbol = "flame"
@@ -414,7 +423,7 @@ struct MenuMetricsTests {
     }
 
     @Test func sidebarOrderAndExtras() {
-        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .duplicates, .slim, .menubar]
+        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .duplicates, .slim, .menubar, .tools]
         #expect(Page.main(order: "", hidden: "") == standard)
         #expect(Page.sidebar(order: "", hidden: "").suffix(3) == [.history, .totals, .settings])
         let reordered = Page.main(order: "clean,overview", hidden: "drives,menubar")

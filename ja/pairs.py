@@ -19,11 +19,11 @@ PLACES = "ダウンロード、デスクトップ、メール、Telegram"
 T = {
 "AppModel.swift": [
     R('case overview, clean, uninstall, optimize, analyze, projects, installers, slim, history, settings',
-      'case overview, clean, uninstall, optimize, analyze, projects, installers, drives, duplicates, slim, menubar, history, totals, settings'),
-    R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n        case .duplicates: "重複ファイル"\n        case .menubar: "メニューバー"\n'),
-    R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n        case .duplicates: "doc.on.doc"\n        case .menubar: "menubar.rectangle"\n'),
-    R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives, .duplicates, .menubar: .blue'),
-    R('        case .slim: "Drop the Intel half of universal apps"\n', '        case .slim: "Drop the Intel half of universal apps"\n        case .drives: "外付けドライブの状態と古い動画"\n        case .duplicates: "同じ内容のファイルを探して整理"\n        case .menubar: "表示する値、間隔、まとめ"\n'),
+      'case overview, clean, uninstall, optimize, analyze, projects, installers, drives, duplicates, slim, menubar, tools, history, totals, settings'),
+    R('        case .slim: "Slim Apps"\n', '        case .slim: "Slim Apps"\n        case .drives: "ドライブ"\n        case .duplicates: "重複ファイル"\n        case .menubar: "メニューバー"\n        case .tools: "ツール"\n'),
+    R('        case .slim: "scissors"\n', '        case .slim: "scissors"\n        case .drives: "externaldrive"\n        case .duplicates: "doc.on.doc"\n        case .menubar: "menubar.rectangle"\n        case .tools: "wrench.and.screwdriver"\n'),
+    R('case .analyze, .projects: .blue', 'case .analyze, .projects, .drives, .duplicates, .menubar: .blue\n        case .tools: .violet'),
+    R('        case .slim: "Drop the Intel half of universal apps"\n', '        case .slim: "Drop the Intel half of universal apps"\n        case .drives: "外付けドライブの状態と古い動画"\n        case .duplicates: "同じ内容のファイルを探して整理"\n        case .tools: "画面とキーボードの掃除、モニターのチェック、ファン"\n        case .menubar: "表示する値、間隔、まとめ"\n'),
     R('        case .history: "History"\n', '        case .history: "History"\n        case .totals: "累計"\n'),
     R('        case .history: "clock.arrow.circlepath"\n', '        case .history: "clock.arrow.circlepath"\n        case .totals: "chart.bar.fill"\n'),
     R('case .overview, .history: .violet', 'case .overview, .history, .totals: .violet'),
@@ -135,7 +135,9 @@ T = {
             if let report {
                 if !report.notes.isEmpty {"""),
     R("""            if let report {
-                Notes(notes: report.notes.filter""", """            RemainingCard(confirm: $confirm, refresh: scan.finishedAt)
+                Notes(notes: report.notes.filter""", """            TrashCard(confirm: $confirm, refresh: scan.finishedAt)
+
+            RemainingCard(confirm: $confirm, refresh: scan.finishedAt)
 
             ExternalCleanCard(model: model, confirm: $confirm)
 
@@ -373,7 +375,7 @@ T = {
 "RootView.swift": [
     R('            ForEach(Page.allCases) { page in\n                if page == .history', '            ForEach(Page.sidebar(order: pageOrder, hidden: hiddenPages)) { page in\n                if page == .history'),
     R('struct Sidebar: View {\n', 'struct Sidebar: View {\n    @AppStorage(Page.orderKey) private var pageOrder = ""\n    @AppStorage(Page.hiddenKey) private var hiddenPages = ""\n'),
-    R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .duplicates: DuplicatesPage()\n        case .menubar: MenuBarPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
+    R('        case .history: HistoryPage()\n', '        case .drives: DrivesPage()\n        case .duplicates: DuplicatesPage()\n        case .menubar: MenuBarPage()\n        case .tools: ToolsPage()\n        case .history: HistoryPage()\n        case .totals: TotalsPage()\n'),
     # "アンインストール" wraps once the row shows its status dot.
     R('Text(page.title).font(.system(size: 14', 'Text(page.title).lineLimit(1).fixedSize().font(.system(size: 14'),
     R('Text("Burrow").font(.system(size: 17', 'Text("Burrow JA").font(.system(size: 17'),

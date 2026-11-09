@@ -70,7 +70,8 @@ def patch_bundle(text, public_key):
     base = (ROOT / "VERSION").read_text().strip()
     region = f"    <key>BurrowBaseVersion</key><string>{base}</string>\n" \
              "    <key>CFBundleDevelopmentRegion</key><string>ja</string>\n" \
-             "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n"
+             "    <key>CFBundleLocalizations</key><array><string>ja</string></array>\n" \
+             "    <key>NSAppleEventsUsageDescription</key><string>Finder ですべてのゴミ箱を空にするために使います。</string>\n"
     text = replace_once(text, "    <key>CFBundleName</key>", region + "    <key>CFBundleName</key>")
     text = replace_once(text, 'codesign --force --deep --sign - "$APP"\n', STABLE_SIGNING)
     text = replace_once(text, 'cp LICENSE "$APP/Contents/Resources/LICENSE"\n',
@@ -132,6 +133,7 @@ def main():
     shutil.copy2(KIT / "MaxClean.swift", sources / "MaxClean.swift")
     shutil.copy2(KIT / "Remaining.swift", sources / "Remaining.swift")
     shutil.copy2(KIT / "Alerts.swift", sources / "Alerts.swift")
+    shutil.copy2(KIT / "Tools.swift", sources / "Tools.swift")
     shutil.copy2(KIT / "MenuTweaks.swift", sources / "MenuTweaks.swift")
     shutil.copy2(KIT / "HeavyApps.swift", sources / "HeavyApps.swift")
     shutil.copy2(KIT / "ManualGuide.swift", sources / "ManualGuide.swift")

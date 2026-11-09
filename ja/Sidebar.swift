@@ -4,7 +4,7 @@ extension Page {
     static let orderKey = "sidebarOrder"
     static let hiddenKey = "sidebarHidden"
     /// Additions on top of Burrow, which anyone can remove from the app.
-    static let extras: [Page] = [.drives, .duplicates, .menubar, .totals]
+    static let extras: [Page] = [.drives, .duplicates, .menubar, .tools, .totals]
     private static let bottom: [Page] = [.history, .totals, .settings]
 
     /// The reorderable pages in `order`. A page the saved order does not know joins at the end,
