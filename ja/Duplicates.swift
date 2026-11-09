@@ -151,7 +151,7 @@ struct DuplicatesPage: View {
                     }
                     ForEach(folders, id: \.self) { folder in
                         HStack {
-                            Text(folder).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+                            Text(verbatim: folder).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Button("外す") { saved = folders.filter { $0 != folder }.joined(separator: "\n") }
                                 .buttonStyle(.link).font(.system(size: 12)).disabled(folders.count == 1)
@@ -218,7 +218,7 @@ struct DuplicatesPage: View {
                 Text("残すフォルダを選ぶと、ほかのフォルダのコピーをまとめて選択します。").caption()
                 ForEach(set.folders, id: \.self) { folder in
                     HStack {
-                        Text((folder as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                        Text(verbatim: (folder as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                         Spacer()
                         Button(keptFolders[set.id] == folder ? "残します" : "ここを残す") { keep(folder, in: set) }
                             .buttonStyle(.pillSecondary).disabled(keptFolders[set.id] == folder)
@@ -248,7 +248,7 @@ struct DuplicatesPage: View {
                         Toggle(isOn: Binding { selected.contains(file.path) } set: { on in
                             if on { selected.insert(file.path) } else { selected.remove(file.path) }
                         }) {
-                            Text((file.path as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                            Text(verbatim: (file.path as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
                         }
                         .toggleStyle(.checkbox)
                         .disabled(!selected.contains(file.path) && !DuplicateFinder.canSelect(file.path, in: group, selected: selected))

@@ -80,7 +80,10 @@ def patch_bundle(text, public_key):
     return replace_once(text, marker, 'mkdir -p "$APP/Contents/Resources/ja.lproj"\n' + marker)
 
 
-def rename_outputs(text):
+def rename_outputs(text, appcast=False):
+    # In appcast.sh each must match: a missed one ships the wrong file or an unsigned update.
+    for needle in ("      <title>Burrow $VERSION</title>\n", '"$SIGN" "$ZIP"', "Burrow.zip") if appcast else ():
+        assert needle in text, f"appcast.sh changed upstream: {needle!r} not found"
     text = text.replace("      <title>Burrow $VERSION</title>\n",
                         "      <title>Burrow $VERSION</title>\n      <description><![CDATA[$(cat \"$OUT/notes.html\")]]></description>\n")
     text = text.replace('"$SIGN" "$ZIP"', '"$SIGN" ${SPARKLE_KEY_FILE:+--ed-key-file "$SPARKLE_KEY_FILE"} "$ZIP"')
@@ -149,7 +152,7 @@ def main():
     bundle.write_text(patch_bundle(bundle.read_text(encoding="utf-8"), public_key), encoding="utf-8")
     for script in ("bundle.sh", "dmg.sh", "appcast.sh"):
         path = OUT / "scripts" / script
-        path.write_text(rename_outputs(path.read_text(encoding="utf-8")), encoding="utf-8")
+        path.write_text(rename_outputs(path.read_text(encoding="utf-8"), script == "appcast.sh"), encoding="utf-8")
     print(f"pairs: {sum(map(len, pairs.T.values()))}, Mole strings: {len(table)}, missing: {len(missing)}, updater: {'on' if public_key else 'off'}")
     for name, en in missing:
         print(f"MISSING {name}: {en[:110]}")

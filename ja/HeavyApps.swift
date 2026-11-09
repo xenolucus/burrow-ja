@@ -61,7 +61,7 @@ struct HeavyAppsCard: View {
 
     private func row(_ app: HeavyApp) -> some View {
         HStack {
-            Text(app.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Text(verbatim: app.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
             Spacer()
             Text("\(Int(app.cpu))%").font(.system(size: 13, weight: .semibold)).monospacedDigit()
             Button("終了") { quit(app) }.buttonStyle(.pillSecondary)

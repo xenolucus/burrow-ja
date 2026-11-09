@@ -1,5 +1,6 @@
 import AppKit
 import IOKit
+import Security
 import SwiftUI
 
 // MARK: - Fans
@@ -25,7 +26,11 @@ enum SMC {
         var bytes: Bytes = (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
     }
 
-    struct Fan: Equatable { let actual: Double; let minimum: Double; let maximum: Double; var manual = false }
+    struct Fan: Equatable {
+        let actual: Double; let minimum: Double; let maximum: Double; var manual = false
+        /// The fan's own number in the SMC keys, which stays right if another fan cannot be read.
+        var index = 0
+    }
 
     static func code(_ text: String) -> UInt32 { text.utf8.reduce(0) { $0 << 8 | UInt32($1) } }
 
@@ -81,6 +86,9 @@ enum SMC {
             return [UInt8(bits & 0xFF), UInt8(bits >> 8 & 0xFF), UInt8(bits >> 16 & 0xFF), UInt8(bits >> 24)]
         case code("ui8 "):
             return [UInt8(max(0, min(255, value)))]
+        case code("fpe2"):
+            let raw = UInt16(min(max(value, 0), 16383) * 4)
+            return [UInt8(raw >> 8), UInt8(raw & 0xFF)]
         default:
             return nil
         }
@@ -135,12 +143,10 @@ enum SMC {
         return body(connection)
     }
 
-    /// Every key whose name starts with T, found once by walking the whole key table.
-    /// A static let runs its initializer once, even when two readings start together.
-    private static let temperatureKeys: [String] = withConnection([]) { connection in
-        let count = Int(read(connection, "#KEY") ?? 0)
-        return (0..<min(count, 6000)).compactMap { key(connection, at: $0) }.filter { $0.hasPrefix("T") }
-    }
+    /// Every key whose name starts with T, found by walking the whole key table, kept once found.
+    /// An empty walk (the SMC busy during wake, say) is tried again on the next reading.
+    nonisolated(unsafe) private static var temperatureKeys: [String] = []
+    private static let keysLock = NSLock()
 
     private static func key(_ connection: io_connect_t, at index: Int) -> String? {
         var input = KeyData()
@@ -150,9 +156,15 @@ enum SMC {
     }
 
     static func temperatures() -> [Temperature] {
-        let keys = temperatureKeys
-        return withConnection([]) { connection in
-            group(keys.compactMap { key in read(connection, key).map { (key: key, celsius: $0) } })
+        withConnection([]) { connection in
+            keysLock.lock()
+            if temperatureKeys.isEmpty {
+                let count = Int(read(connection, "#KEY") ?? 0)
+                temperatureKeys = (0..<min(count, 6000)).compactMap { key(connection, at: $0) }.filter { $0.hasPrefix("T") }
+            }
+            let keys = temperatureKeys
+            keysLock.unlock()
+            return group(keys.compactMap { key in read(connection, key).map { (key: key, celsius: $0) } })
         }
     }
 
@@ -161,7 +173,7 @@ enum SMC {
         return (0..<min(count, 4)).compactMap { index in
             read(connection, "F\(index)Ac").map {
                 Fan(actual: $0, minimum: read(connection, "F\(index)Mn") ?? 0, maximum: read(connection, "F\(index)Mx") ?? 0,
-                    manual: (read(connection, "F\(index)Md") ?? 0) == 1)
+                    manual: (read(connection, "F\(index)Md") ?? 0) == 1, index: index)
             }
         }
     }
@@ -176,11 +188,19 @@ enum SMC {
             guard !list.isEmpty, share == nil || list.allSatisfy(canControl) else { return false }
             // Some Apple silicon Macs refuse a manual mode until this test flag is set.
             let unlocked = read(connection, "Ftst") != nil
-            if unlocked { _ = write(connection, "Ftst", share == nil ? 0 : 1) }
-            return list.indices.allSatisfy { index in
-                guard let share else { return write(connection, "F\(index)Md", 0) }
-                return write(connection, "F\(index)Md", 1) && write(connection, "F\(index)Tg", target(list[index], share: share))
+            func automatic() -> Bool {
+                let done = list.allSatisfy { write(connection, "F\($0.index)Md", 0) }
+                if unlocked { _ = write(connection, "Ftst", 0) }
+                return done
             }
+            guard let share else { return automatic() }
+            if unlocked { _ = write(connection, "Ftst", 1) }
+            let done = list.allSatisfy { fan in
+                write(connection, "F\(fan.index)Md", 1) && write(connection, "F\(fan.index)Tg", target(fan, share: share))
+            }
+            // A half-applied change would leave fans pinned at an old speed, so hand them back.
+            if !done { _ = automatic() }
+            return done
         }
     }
 
@@ -196,8 +216,19 @@ enum SMC {
 
 enum FanControl {
     /// Asks for the administrator password, then runs this app's own binary as root.
+    /// The bundle on disk must still be the one that is running, signed the same way,
+    /// so nothing swapped into it gets run with the administrator password.
+    static func bundleIsIntact() -> Bool {
+        var me: SecCode?, running: SecStaticCode?, requirement: SecRequirement?, onDisk: SecStaticCode?
+        guard SecCodeCopySelf([], &me) == errSecSuccess, let me,
+              SecCodeCopyStaticCode(me, [], &running) == errSecSuccess, let running,
+              SecCodeCopyDesignatedRequirement(running, [], &requirement) == errSecSuccess, let requirement,
+              SecStaticCodeCreateWithPath(Bundle.main.bundleURL as CFURL, [], &onDisk) == errSecSuccess, let onDisk else { return false }
+        return SecStaticCodeCheckValidity(onDisk, SecCSFlags(rawValue: kSecCSCheckAllArchitectures), requirement) == errSecSuccess
+    }
+
     static func apply(_ share: Double?) -> Bool {
-        guard let binary = Bundle.main.executablePath else { return false }
+        guard bundleIsIntact(), let binary = Bundle.main.executablePath else { return false }
         let command = Remaining.shellQuoted([binary]) + " --set-fans " + (share.map { String($0) } ?? "auto")
         let quoted = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
         let process = Process()
@@ -336,6 +367,12 @@ final class FrameMeter {
             self.handle(event)
             return nil
         }
+        if mode == .wipe {
+            timer = Task { [weak self] in
+                try? await Task.sleep(for: .seconds(600))
+                if !Task.isCancelled { self?.stop() }
+            }
+        }
         if mode == .keyboard {
             KeyboardLock.start()
             secondsLeft = Self.keyboardSeconds
@@ -366,8 +403,9 @@ final class FrameMeter {
         case .wipe:
             // Two presses, so a cloth leaning on the keyboard does not end it.
             // keyCode raises on a mouse event, so check the type first.
-            if event.type == .keyDown, event.keyCode == 53 { escapes += 1 }
-            if escapes >= 2 { stop() }
+            if event.type == .keyDown, event.keyCode == 53, !event.isARepeat { escapes += 1 }
+            // A keyboard without a working Esc can still leave with a triple click.
+            if escapes >= 2 || (event.type == .leftMouseDown && event.clickCount >= 3) { stop() }
         case .monitor:
             if event.type == .keyDown, event.keyCode == 53 { return stop() }
             if event.type == .keyDown, event.keyCode == 35 { return wide.toggle() }  // P
@@ -392,7 +430,7 @@ private struct CoverView: View {
                 Spacer()
                 switch cover.mode {
                 case .wipe:
-                    Text("画面を拭けます。Esc を2回押すと終わります。").foregroundStyle(.white.opacity(0.35))
+                    Text("画面を拭けます。Esc を2回押すか、3回クリックすると終わります。10分で自動で終わります。").foregroundStyle(.white.opacity(0.35))
                 case .keyboard:
                     Text("キーボードを拭けます").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
                     Text("キーは入力されません。あと \(cover.secondsLeft) 秒で自動で終わります。").foregroundStyle(.white.opacity(0.7))
@@ -709,7 +747,7 @@ struct ToolsPage: View {
                 Text("RGB の各色 100%、カラーバー、グラデーション、黒と白の限界、ガンマ、1 ピクセルの模様、文字、格子、動きとフレームレートの \(MonitorPattern.allCases.count) 種類を順に確かめます。P で sRGB と Display P3 を切り替えます。").caption().fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Picker("画面", selection: $screen) {
-                        ForEach(NSScreen.screens.indices, id: \.self) { Text(NSScreen.screens[$0].localizedName).tag($0) }
+                        ForEach(NSScreen.screens.indices, id: \.self) { Text(verbatim: NSScreen.screens[$0].localizedName).tag($0) }
                     }
                     .labelsHidden().fixedSize()
                     Spacer()
@@ -730,7 +768,7 @@ struct ToolsPage: View {
                 ForEach(fans.indices, id: \.self) { index in
                     let fan = fans[index]
                     HStack {
-                        Text("ファン \(index + 1)").font(.system(size: 13))
+                        Text("ファン \(fan.index + 1)").font(.system(size: 13))
                         Spacer()
                         Text("\(Int(fan.actual)) rpm").font(.system(size: 13, weight: .semibold)).monospacedDigit()
                         Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption().fixedSize(horizontal: false, vertical: true)
@@ -786,6 +824,8 @@ struct TrashPlace: Identifiable, Equatable, Sendable {
         process.arguments = ["-e", "tell application \"Finder\" to empty trash"]
         process.standardError = FileHandle.nullDevice
         guard (try? process.run()) != nil else { return false }
+        // A dialog in Finder or a pending permission prompt must not leave the button stuck.
+        DispatchQueue.global().asyncAfter(deadline: .now() + 120) { if process.isRunning { process.terminate() } }
         process.waitUntilExit()
         return process.terminationStatus == 0
     }
@@ -807,7 +847,7 @@ struct TrashCard: View {
                         Text("Mole は Mac のゴミ箱だけを空にします。外付けドライブと iCloud Drive のゴミ箱は Finder で空にします。").caption().fixedSize(horizontal: false, vertical: true)
                         ForEach(places) { place in
                             HStack {
-                                Text(place.name).font(.system(size: 13))
+                                Text(verbatim: place.name).font(.system(size: 13))
                                 Spacer()
                                 Text(place.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
                             }

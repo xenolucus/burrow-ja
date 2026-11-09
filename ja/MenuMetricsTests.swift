@@ -451,6 +451,10 @@ struct MenuMetricsTests {
     @Test func reorderingKeepsHiddenPagesInPlace() {
         #expect(Page.keepingHidden([.clean, .overview], in: [.overview, .drives, .clean]) == [.clean, .drives, .overview])
         #expect(MenuTweak.load(#"{"cpu":{"scale":1.2}}"#)["cpu"]?.scale == 1.2)
+        let mixed = MenuTweak.load(#"{"cpu":{"scale":0},"memory":null,"disk":{"x":2}}"#)
+        #expect(mixed["cpu"]?.scale == 0.7 && mixed["memory"] == nil && mixed["disk"]?.x == 2)
+        #expect(MenuHider.nextPage(after: "1", groups: [MenuGroup(id: "1"), MenuGroup(id: "2")], includeAll: false) == "2")
+        #expect(MenuHider.nextPage(after: "2", groups: [MenuGroup(id: "1"), MenuGroup(id: "2")], includeAll: false) == "1")
     }
 
     @Test func sidebarOrderAndExtras() {

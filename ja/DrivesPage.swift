@@ -103,7 +103,7 @@ struct DrivesPage: View {
         return GlowCard(glow: .blue, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
-                    Text(drive.lastPathComponent).cardTitle()
+                    Text(verbatim: drive.lastPathComponent).cardTitle()
                     Spacer()
                     Button("古い動画を探す") { find(drive) }.buttonStyle(.pillSecondary).disabled(scanning != nil)
                 }
@@ -133,7 +133,7 @@ struct DrivesPage: View {
         ForEach(list.prefix(50)) { video in
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text((video.path as NSString).lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(verbatim: (video.path as NSString).lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     Text(video.lastUsed.formatted(date: .abbreviated, time: .omitted)).caption()
                 }
                 Spacer()

@@ -356,6 +356,11 @@ final class MenuHider: ObservableObject {
         if on {
             start()
         } else {
+            // Whatever was open or being made room for must not carry over to the next start.
+            [revealTask, pressTask, collapseTask, roomTask].forEach { $0?.cancel() }
+            expanded = []
+            makingRoom = false
+            passing = nil
             restriction?.release()
             bar.sync([])
             MenuHotKeys.remove()
@@ -415,8 +420,9 @@ final class MenuHider: ObservableObject {
     private var pageMode: Bool { UserDefaults.standard.bool(forKey: Self.pageModeKey) }
 
     /// Page order: every group, then the page that shows everything.
-    nonisolated static func nextPage(after current: String?, groups: [MenuGroup]) -> String {
-        let pages = groups.map(\.id) + [allPage]
+    nonisolated static func nextPage(after current: String?, groups: [MenuGroup], includeAll: Bool = true) -> String {
+        // Without page mode "all" is not a group to toggle: opening it would keep everything shown.
+        let pages = groups.map(\.id) + (includeAll || groups.isEmpty ? [allPage] : [])
         guard let current, let index = pages.firstIndex(of: current) else { return pages[0] }
         return pages[(index + 1) % pages.count]
     }
@@ -427,7 +433,13 @@ final class MenuHider: ObservableObject {
 
     func hotKey(_ number: Int) {
         guard enabled else { return }
-        if number == 0 { return showPage(Self.nextPage(after: expanded.first, groups: groups)) }
+        if number == 0 {
+            if pageMode { return showPage(Self.nextPage(after: expanded.first, groups: groups)) }
+            // Toggle mode: close what is open and open the group after it.
+            let next = Self.nextPage(after: expanded.first, groups: groups, includeAll: false)
+            expanded.filter { $0 != next }.forEach { toggleGroup($0) }
+            return toggleGroup(next)
+        }
         if groups.indices.contains(number - 1) { showPage(groups[number - 1].id) }
     }
 
@@ -453,11 +465,13 @@ final class MenuHider: ObservableObject {
 
     func setHotKeys(_ on: Bool) {
         UserDefaults.standard.set(on, forKey: Self.hotKeysKey)
-        on ? MenuHotKeys.install() : MenuHotKeys.remove()
+        // Registered keys belong to Burrow system-wide, so only while the feature runs.
+        on && enabled ? MenuHotKeys.install() : MenuHotKeys.remove()
     }
 
     private func expansionChanged(opened: Bool) {
         makingRoom = false
+        guard enabled else { return }
         bar.sync(groups, expanded: expanded)
         apply()
         roomTask?.cancel()
@@ -483,7 +497,7 @@ final class MenuHider: ObservableObject {
             guard !Task.isCancelled else { return }
             expanded = []
             makingRoom = false
-            bar.sync(groups)
+            if enabled { bar.sync(groups) }
             apply()
         }
     }
@@ -638,12 +652,17 @@ final class MenuHider: ObservableObject {
     private func watchApps() {
         guard !watching else { return }
         watching = true
+        // Hidden items come back when Burrow quits, rather than relying on the system to drop the assertion.
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.restriction?.release() }
+        }
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
                 MainActor.assumeIsolated {
-                    self?.apply()
-                    self?.refreshApps()
+                    guard let self, self.enabled else { return }
+                    self.apply()
+                    self.refreshApps()
                 }
             }
         }
@@ -755,7 +774,7 @@ struct MenuHideCard: View {
                     Button { run(app.id) } label: {
                         HStack(spacing: 6) {
                             Image(nsImage: app.icon).resizable().frame(width: 16, height: 16)
-                            Text(app.name).font(.system(size: 13)).lineLimit(1)
+                            Text(verbatim: app.name).font(.system(size: 13)).lineLimit(1)
                             Spacer(minLength: 4)
                             Text(action).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
                         }

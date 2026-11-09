@@ -144,7 +144,7 @@ struct ExternalCleanCard: View {
                     }
                     ForEach(drives, id: \.self) { drive in
                         HStack {
-                            Text(drive.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(verbatim: drive.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
                             Spacer()
                             Button("プレビュー") { find(drive) }.buttonStyle(.pillSecondary).disabled(scanning != nil)
                             Button("今すぐクリーン") { askClean() }.buttonStyle(.pill)
@@ -172,7 +172,7 @@ struct ExternalCleanCard: View {
                 Toggle(isOn: binding(cache)) {
                     VStack(alignment: .leading, spacing: 2) {
                         Text(cache.kind).font(.system(size: 13, weight: .medium))
-                        Text(cache.path).caption().lineLimit(1).truncationMode(.middle)
+                        Text(verbatim: cache.path).caption().lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .toggleStyle(.checkbox)

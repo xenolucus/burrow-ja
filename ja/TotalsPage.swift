@@ -20,7 +20,14 @@ enum TotalsStore {
         (try? Data(contentsOf: file)).flatMap { try? JSONDecoder().decode([TotalRecord].self, from: $0) } ?? []
     }
 
+    /// A file that exists but cannot be read, for example one written by a newer version, is never overwritten.
+    private static var unreadable: Bool {
+        guard let data = try? Data(contentsOf: file) else { return false }
+        return (try? JSONDecoder().decode([TotalRecord].self, from: data)) == nil
+    }
+
     private static func save(_ records: [TotalRecord]) {
+        guard !unreadable else { return }
         // Atomic: a crash mid-write must not lose the running total.
         try? JSONEncoder().encode(records).write(to: file, options: .atomic)
     }
@@ -35,8 +42,9 @@ enum TotalsStore {
     }
 
     static func sync() async -> [TotalRecord] {
+        guard let history = try? await Mole.json(HistoryResult.self, ["history", "--json", "--limit", "200"]) else { return load() }
+        // Read after the wait, so a drive clean saved meanwhile is kept.
         let current = load()
-        guard let history = try? await Mole.json(HistoryResult.self, ["history", "--json", "--limit", "200"]) else { return current }
         let records = merged(current, with: history.sessions ?? [])
         if records != current { save(records) }
         return records

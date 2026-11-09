@@ -164,7 +164,7 @@ struct RemainingCard: View {
                 if on { selected.insert(item.id) } else { selected.remove(item.id) }
             }) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(item.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(verbatim: item.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
                     if item.owner == "com.spotify.client" {
                         Text("オフライン保存した音楽も消える場合があります。").caption()
                     } else if !running(item.owner).isEmpty {

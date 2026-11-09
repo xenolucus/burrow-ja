@@ -18,13 +18,18 @@ struct MenuTweak: Codable, Equatable {
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
-        scale = try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1
-        x = try container.decodeIfPresent(Double.self, forKey: .x) ?? 0
-        y = try container.decodeIfPresent(Double.self, forKey: .y) ?? 0
+        // Kept to the sliders' ranges, so a hand-edited value cannot give a zero or negative width.
+        scale = min(max(try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1, 0.7), 1.3)
+        x = min(max(try container.decodeIfPresent(Double.self, forKey: .x) ?? 0, -6), 6)
+        y = min(max(try container.decodeIfPresent(Double.self, forKey: .y) ?? 0, -4), 4)
     }
 
+    /// Each entry on its own, so one unreadable entry never takes the others with it.
     static func load(_ text: String) -> [String: MenuTweak] {
-        (try? JSONDecoder().decode([String: MenuTweak].self, from: Data(text.utf8))) ?? [:]
+        guard let raw = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return [:] }
+        return raw.compactMapValues { value in
+            (try? JSONSerialization.data(withJSONObject: value)).flatMap { try? JSONDecoder().decode(MenuTweak.self, from: $0) }
+        }
     }
 
     static func save(_ tweaks: [String: MenuTweak]) -> String {
