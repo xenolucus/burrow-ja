@@ -37,8 +37,40 @@ enum SMC {
             return Double(Int(bytes[0]) << 6 | Int(bytes[1]) >> 2)
         case code("ui8 ") where bytes.count >= 1:
             return Double(bytes[0])
+        case code("ui16") where bytes.count >= 2:
+            return Double(UInt16(bytes[0]) << 8 | UInt16(bytes[1]))
+        case code("ui32") where bytes.count >= 4:
+            return Double(UInt32(bytes[0]) << 24 | UInt32(bytes[1]) << 16 | UInt32(bytes[2]) << 8 | UInt32(bytes[3]))
+        case code("sp78") where bytes.count >= 2:
+            return Double(Int16(bitPattern: UInt16(bytes[0]) << 8 | UInt16(bytes[1]))) / 256
         default:
             return nil
+        }
+    }
+
+    static func name(_ code: UInt32) -> String {
+        String(bytes: [24, 16, 8, 0].map { UInt8(code >> $0 & 0xFF) }, encoding: .ascii) ?? ""
+    }
+
+    struct Temperature: Equatable { let place: String; let average: Double; let maximum: Double; let count: Int }
+
+    /// Where a sensor sits, from the first two letters of its key. Apple does not document these;
+    /// they follow the names used by open-source monitors.
+    static let places: [(String, [String])] = [
+        ("CPU", ["Tp", "Te", "TC", "Tc"]), ("GPU", ["Tg", "TG"]), ("メモリ", ["Tm", "TM"]), ("ストレージ", ["TH", "TN"]),
+        ("バッテリー", ["TB"]), ("本体の表面", ["Ts", "TS"]), ("吸気（本体に入る空気）", ["Ta", "TA"]), ("Wi-Fi", ["TW"]),
+    ]
+
+    static func group(_ readings: [(key: String, celsius: Double)]) -> [Temperature] {
+        let valid = readings.filter { $0.celsius > 0 && $0.celsius < 130 }
+        return (places.map { $0.0 } + ["その他"]).compactMap { place in
+            let values = valid.filter { reading in
+                let prefix = String(reading.key.prefix(2))
+                let known = places.first { $0.1.contains(prefix) }?.0
+                return (known ?? "その他") == place
+            }.map { $0.celsius }
+            guard let maximum = values.max() else { return nil }
+            return Temperature(place: place, average: values.reduce(0, +) / Double(values.count), maximum: maximum, count: values.count)
         }
     }
 
@@ -100,6 +132,26 @@ enum SMC {
         return body(connection)
     }
 
+    /// Every key whose name starts with T, found once by walking the whole key table.
+    nonisolated(unsafe) private static var temperatureKeys: [String]?
+
+    private static func key(_ connection: io_connect_t, at index: Int) -> String? {
+        var input = KeyData()
+        input.command = 8
+        input.data32 = UInt32(index)
+        return call(connection, &input).map { name($0.key) }
+    }
+
+    static func temperatures() -> [Temperature] {
+        withConnection([]) { connection in
+            if temperatureKeys == nil {
+                let count = Int(read(connection, "#KEY") ?? 0)
+                temperatureKeys = (0..<min(count, 6000)).compactMap { key(connection, at: $0) }.filter { $0.hasPrefix("T") }
+            }
+            return group((temperatureKeys ?? []).compactMap { key in read(connection, key).map { (key: key, celsius: $0) } })
+        }
+    }
+
     private static func fans(_ connection: io_connect_t) -> [Fan] {
         let count = Int(read(connection, "FNum") ?? 0)
         return (0..<min(count, 4)).compactMap { index in
@@ -139,8 +191,6 @@ enum SMC {
 }
 
 enum FanControl {
-    static let choices: [(String, Double?)] = [("自動", nil), ("中", 0.5), ("高", 0.75), ("最大", 1)]
-
     /// Asks for the administrator password, then runs this app's own binary as root.
     static func apply(_ share: Double?) -> Bool {
         guard let binary = Bundle.main.executablePath else { return false }
@@ -164,7 +214,8 @@ private final class CoverWindow: NSWindow {
 
 /// What the monitor check shows, in order.
 enum MonitorPattern: CaseIterable {
-    case white, black, red, green, blue, cyan, magenta, yellow, ramps, steps, nearBlack, nearWhite, grid, motion
+    case white, black, red, green, blue, cyan, magenta, yellow, gray50, gray25, bars, ramps, steps, nearBlack, nearWhite,
+         gamma, contrast, checker, vLines, hLines, text, grid, motion
 
     var name: String {
         switch self {
@@ -176,6 +227,15 @@ enum MonitorPattern: CaseIterable {
         case .cyan: "シアン (0, 255, 255)"
         case .magenta: "マゼンタ (255, 0, 255)"
         case .yellow: "黄 (255, 255, 0)"
+        case .gray50: "灰 50%（ムラと光漏れ）"
+        case .gray25: "灰 25%（暗い部分のムラ）"
+        case .bars: "カラーバー"
+        case .gamma: "ガンマ（離れて見て中央の四角が縞に溶ければ 2.2）"
+        case .contrast: "コントラスト（白黒の市松）"
+        case .checker: "1 ピクセルの市松（シャープさ、拡大の有無）"
+        case .vLines: "1 ピクセルの縦線（ちらつき、にじみ）"
+        case .hLines: "1 ピクセルの横線（ちらつき、にじみ）"
+        case .text: "文字のくっきり具合"
         case .ramps: "グラデーション（段差が見えなければ滑らか）"
         case .steps: "32 段階（隣どうしの区別がつくか）"
         case .nearBlack: "黒の限界（0〜20 のうち見える段まで）"
@@ -196,6 +256,8 @@ enum MonitorPattern: CaseIterable {
         case .cyan: (0, 1, 1)
         case .magenta: (1, 0, 1)
         case .yellow: (1, 1, 0)
+        case .gray50: (0.5, 0.5, 0.5)
+        case .gray25: (0.25, 0.25, 0.25)
         default: nil
         }
     }
@@ -348,6 +410,9 @@ private struct CoverView: View {
         Color(cover.wide ? .displayP3 : .sRGB, red: red, green: green, blue: blue)
     }
 
+    /// White, yellow, cyan, green, magenta, red, blue, black.
+    private static let bars: [(Double, Double, Double)] = [(1, 1, 1), (1, 1, 0), (0, 1, 1), (0, 1, 0), (1, 0, 1), (1, 0, 0), (0, 0, 1), (0, 0, 0)]
+
     /// One row per channel: gray, red, green, blue.
     private var channels: [(Double, Double, Double)] { [(1, 1, 1), (1, 0, 0), (0, 1, 0), (0, 0, 1)] }
 
@@ -393,6 +458,42 @@ private struct CoverView: View {
                 }
             case .motion:
                 MotionTest()
+            case .bars:
+                HStack(spacing: 0) {
+                    ForEach(Self.bars.indices, id: \.self) { index in
+                        let (red, green, blue) = Self.bars[index]
+                        color(red, green, blue)
+                    }
+                }
+            case .checker, .vLines, .hLines:
+                PixelPattern(pattern: pattern)
+            case .gamma:
+                ZStack {
+                    PixelPattern(pattern: .hLines)
+                    // Half the light of white, written in sRGB: matches the stripes only at gamma 2.2.
+                    Color(.sRGB, white: 0.7354).frame(width: 320, height: 320)
+                }
+            case .contrast:
+                VStack(spacing: 0) {
+                    ForEach(0..<4, id: \.self) { row in
+                        HStack(spacing: 0) {
+                            ForEach(0..<4, id: \.self) { column in (row + column).isMultiple(of: 2) ? Color.white : Color.black }
+                        }
+                    }
+                }
+            case .text:
+                VStack(spacing: 0) {
+                    ForEach([Color.white, Color.black], id: \.self) { background in
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach([7, 9, 11, 13, 16, 20, 28], id: \.self) { size in
+                                Text("\(size) pt　あいうえお 永 ABCDEFG abcdefg 0123456789 ¥&@#").font(.system(size: CGFloat(size)))
+                            }
+                        }
+                        .foregroundStyle(background == .white ? Color.black : Color.white)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .leading).padding(.horizontal, 60)
+                        .background(background)
+                    }
+                }
             default:
                 Canvas { context, size in
                     context.fill(Path(CGRect(origin: .zero, size: size)), with: .color(.black))
@@ -404,6 +505,39 @@ private struct CoverView: View {
                                                           width: size.height * 2 / 3, height: size.height * 2 / 3)),
                                    with: .color(.white), lineWidth: 2)
                 }
+            }
+        }
+    }
+}
+
+/// Drawn pixel for pixel, so the screen's own scaling cannot blur it.
+private struct PixelPattern: View {
+    let pattern: MonitorPattern
+    @Environment(\.displayScale) private var scale
+
+    static func isOn(_ pattern: MonitorPattern, x: Int, y: Int) -> Bool {
+        switch pattern {
+        case .checker: (x + y).isMultiple(of: 2)
+        case .vLines: x.isMultiple(of: 2)
+        default: y.isMultiple(of: 2)
+        }
+    }
+
+    static func image(_ pattern: MonitorPattern, width: Int, height: Int) -> CGImage? {
+        guard width > 0, height > 0, let space = CGColorSpace(name: CGColorSpace.genericGrayGamma2_2),
+              let context = CGContext(data: nil, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width, space: space,
+                                      bitmapInfo: CGImageAlphaInfo.none.rawValue),
+              let data = context.data?.assumingMemoryBound(to: UInt8.self) else { return nil }
+        for y in 0..<height {
+            for x in 0..<width { data[y * width + x] = isOn(pattern, x: x, y: y) ? 255 : 0 }
+        }
+        return context.makeImage()
+    }
+
+    var body: some View {
+        GeometryReader { geometry in
+            if let image = Self.image(pattern, width: Int(geometry.size.width * scale), height: Int(geometry.size.height * scale)) {
+                Image(decorative: image, scale: scale).interpolation(.none)
             }
         }
     }
@@ -488,6 +622,8 @@ struct ToolsPage: View {
     @ViewState private var needsPermission = false
     @ViewState private var fanBusy = false
     @ViewState private var fanFailed = false
+    @ViewState private var fanShare = 0.5
+    @ViewState private var temperatures: [SMC.Temperature] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -501,6 +637,7 @@ struct ToolsPage: View {
                 }
                 monitorCard
                 fanCard
+                temperatureCard
             }
             if needsPermission && !KeyboardLock.allowed {
                 Text("キーボードを止めるには「システム設定」→「プライバシーとセキュリティ」→「アクセシビリティ」で Burrow JA をオンにしてください。")
@@ -510,7 +647,28 @@ struct ToolsPage: View {
         .task {
             while !Task.isCancelled {
                 fans = await Task.detached(priority: .utility) { SMC.fans() }.value
+                temperatures = await Task.detached(priority: .utility) { SMC.temperatures() }.value
                 try? await Task.sleep(for: .seconds(2))
+            }
+        }
+    }
+
+    private var temperatureCard: some View {
+        GlowCard(glow: .violet, style: .rim, padding: 22) {
+            VStack(alignment: .leading, spacing: 10) {
+                Label("温度", systemImage: "thermometer.medium").cardTitle()
+                if temperatures.isEmpty {
+                    Text("温度センサーを読めませんでした。").caption()
+                }
+                ForEach(temperatures, id: \.place) { item in
+                    HStack {
+                        Text(item.place).font(.system(size: 13))
+                        Spacer()
+                        Text(String(format: "%.1f℃", item.average)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                        Text(String(format: "最高 %.0f℃・%d 個", item.maximum, item.count)).caption().frame(width: 96, alignment: .trailing)
+                    }
+                }
+                Text("Mac に外気温のセンサーはありません。「吸気」が本体に入る空気の温度で、外気にいちばん近い値です。項目の分け方はセンサー名からの推定です。").caption()
             }
         }
     }
@@ -541,7 +699,7 @@ struct ToolsPage: View {
         GlowCard(glow: .violet, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("モニターのチェック", systemImage: "display").cardTitle()
-                Text("RGB の各色を 100% で表示し、グラデーション、黒と白の限界、格子、動きとフレームレートを順に確かめます。P で sRGB と Display P3 を切り替えます。").caption()
+                Text("RGB の各色 100%、カラーバー、グラデーション、黒と白の限界、ガンマ、1 ピクセルの模様、文字、格子、動きとフレームレートの \(MonitorPattern.allCases.count) 種類を順に確かめます。P で sRGB と Display P3 を切り替えます。").caption()
                 HStack {
                     Picker("画面", selection: $screen) {
                         ForEach(NSScreen.screens.indices, id: \.self) { Text(NSScreen.screens[$0].localizedName).tag($0) }
@@ -571,14 +729,17 @@ struct ToolsPage: View {
                         Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption()
                     }
                 }
-                if !fans.isEmpty {
-                    HStack(spacing: 6) {
-                        ForEach(FanControl.choices.indices, id: \.self) { index in
-                            let choice = FanControl.choices[index]
-                            Button(choice.0) { setFans(choice.1) }
-                                .buttonStyle(.pillSecondary).disabled(fanBusy)
-                        }
+                if let first = fans.first {
+                    HStack(spacing: 10) {
+                        Slider(value: $fanShare, in: 0...1, onEditingChanged: { editing in
+                            if !editing { setFans(fanShare) }
+                        })
+                        .disabled(fanBusy).accessibilityLabel("ファンの回転数")
+                        Text("\(Int(SMC.target(first, share: fanShare))) rpm").font(.system(size: 13, weight: .medium)).monospacedDigit()
+                            .frame(width: 76, alignment: .trailing)
+                        Button("自動") { setFans(nil) }.buttonStyle(.pillSecondary).disabled(fanBusy)
                     }
+                    Text("スライダーを離すと反映します。ファンが2つあれば、どちらも同じ割合にします。").caption()
                     Text(fans.contains(where: \.manual) ? "固定中です。温度が上がっても速くなりません。使い終わったら「自動」に戻してください。"
                          : "今は macOS が温度に合わせて決めています。")
                         .font(.system(size: 12)).foregroundStyle(fans.contains(where: \.manual) ? Theme.danger : Theme.secondaryText)

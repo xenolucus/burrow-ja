@@ -233,7 +233,17 @@ struct MenuMetricsTests {
         let meter = FrameMeter()
         for frame in 0..<120 { _ = meter.tick(Double(frame) / 60) }
         #expect(meter.tick(2) == 61 && meter.count == 121)
-        #expect(MonitorPattern.allCases.compactMap(\.rgb).count == 8)
+        #expect(MonitorPattern.allCases.compactMap(\.rgb).count == 10)
+    }
+
+    @Test func temperaturesGroupBySensorPlace() {
+        let groups = SMC.group([("Tp01", 50), ("Tp02", 70), ("TB0T", 30), ("Tz99", 40), ("Tp03", 0), ("TaLP", 200)])
+        #expect(groups == [SMC.Temperature(place: "CPU", average: 60, maximum: 70, count: 2),
+                           SMC.Temperature(place: "バッテリー", average: 30, maximum: 30, count: 1),
+                           SMC.Temperature(place: "その他", average: 40, maximum: 40, count: 1)])
+        #expect(SMC.name(SMC.code("TB0T")) == "TB0T")
+        #expect(SMC.number(type: SMC.code("ui32"), bytes: [0, 0, 5, 220]) == 1500)
+        #expect(SMC.number(type: SMC.code("sp78"), bytes: [0x2A, 0x80]) == 42.5)
     }
 
     @Test func smcLayoutAndNumbersMatchTheKernel() {
