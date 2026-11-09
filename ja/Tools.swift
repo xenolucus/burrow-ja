@@ -344,7 +344,8 @@ enum KeyboardLock {
 
 struct ToolsPage: View {
     @ObservedObject private var cover = Cover.shared
-    @ViewState private var fans: [SMC.Fan] = []
+    /// nil until the first reading, so a Mac with fans never flashes the no-fan text.
+    @ViewState private var fans: [SMC.Fan]?
     @ViewState private var screen = 0
     @ViewState private var needsPermission = false
     @ViewState private var fanBusy = false
@@ -419,9 +420,10 @@ struct ToolsPage: View {
         GlowCard(glow: .violet, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("ファン", systemImage: "fan").cardTitle()
-                if fans.isEmpty {
-                    Text("ファンの回転数を読めませんでした。ファンのない Mac では表示されません。").caption()
+                if self.fans?.isEmpty == true {
+                    Text("このデバイスにはファンが搭載されていません。").caption()
                 }
+                let fans = self.fans ?? []
                 ForEach(fans.indices, id: \.self) { index in
                     let fan = fans[index]
                     HStack {
