@@ -451,6 +451,7 @@
 "Preview cleanup without making changes",
 "Preview purge actions without making changes",
 "Previous optimize task was not finished",
+"Pruning Docker build cache...",
 "Rebuildable system caches",
 "Refusing to clean a volume diskutil could not describe",
 "Refusing to clean an internal volume",

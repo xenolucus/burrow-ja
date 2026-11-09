@@ -148,6 +148,8 @@ RubyGems spec cache|$HOME/.gem/specs/*|package_manager
 Conda package metadata/tarball cache|$HOME/.conda/pkgs|package_manager
 Anaconda package metadata/tarball cache|$HOME/anaconda3/pkgs|package_manager
 Playwright browser binaries|$HOME/Library/Caches/ms-playwright*|ai_ml_cache
+Camoufox browser binaries|$HOME/Library/Caches/camoufox*|ai_ml_cache
+Cypress test runner binaries|$HOME/Library/Caches/Cypress*|ai_ml_cache
 Safari web browser cache|$HOME/Library/Caches/com.apple.Safari/*|browser_cache
 Chrome browser cache|$HOME/Library/Caches/Google/Chrome/*|browser_cache
 Firefox browser cache|$HOME/Library/Caches/Firefox/*|browser_cache
@@ -155,6 +157,7 @@ Brave browser cache|$HOME/Library/Caches/BraveSoftware/Brave-Browser/*|browser_c
 Surge proxy cache|$HOME/Library/Caches/com.nssurge.surge-mac/*|network_tools
 Surge configuration and data|$HOME/Library/Application Support/com.nssurge.surge-mac/*|network_tools
 Docker BuildX cache|$HOME/.docker/buildx/cache/*|container_cache
+Docker build cache and dangling images|$HOME/Library/Containers/com.docker.docker/Data|container_cache
 Podman container storage temp|$HOME/.local/share/containers/storage/tmp/*|container_cache
 Tart OCI/IPSW cache|$HOME/.tart/cache|container_cache
 Font cache|$HOME/Library/Caches/com.apple.FontRegistry/*|system_cache

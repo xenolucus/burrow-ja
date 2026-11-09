@@ -61,6 +61,7 @@ readonly MOLE_PURGE_DEFAULT_SEARCH_PATHS=(
     "$HOME/Workspace"
     "$HOME/Repos"
     "$HOME/Development"
+    "$HOME/Developer"
     "$HOME/Library/CloudStorage"
     # AI agent worktree containers. These sit under dot directories, which
     # discover_project_dirs cannot reach: it globs "$HOME"/*/ and
@@ -70,6 +71,7 @@ readonly MOLE_PURGE_DEFAULT_SEARCH_PATHS=(
     # directories in general. The worktrees themselves are never removed.
     "$HOME/.codex/worktrees"
     "$HOME/.claude/worktrees"
+    "$HOME/.t3/worktrees"
 )
 
 readonly MOLE_PURGE_MONOREPO_INDICATORS=(
@@ -312,7 +314,7 @@ mole_purge_read_paths_config() {
     [[ -f "$config_file" ]] || return 0
 
     local line
-    while IFS= read -r line; do
+    while IFS= read -r line || [[ -n "$line" ]]; do
         line="${line#"${line%%[![:space:]]*}"}"
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" || "$line" =~ ^# ]] && continue
