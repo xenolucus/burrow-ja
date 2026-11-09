@@ -236,6 +236,10 @@ struct MenuMetricsTests {
         #expect(SMC.number(type: SMC.code("ui8 "), bytes: [2]) == 2)
         #expect(SMC.number(type: SMC.code("fpe2"), bytes: [0x1F, 0x40]) == 2000)
         #expect(SMC.number(type: SMC.code("xyz "), bytes: [1, 2, 3, 4]) == nil)
+        let encoded = SMC.encode(type: SMC.code("flt "), 2000) ?? []
+        #expect(SMC.number(type: SMC.code("flt "), bytes: encoded) == 2000)
+        let fan = SMC.Fan(actual: 0, minimum: 1000, maximum: 5000)
+        #expect(SMC.target(fan, share: 0.5) == 3000 && SMC.target(fan, share: -1) == 1000 && SMC.target(fan, share: 2) == 5000)
     }
 
     @Test func menuTweaksSurviveSavingAndDropDefaults() {

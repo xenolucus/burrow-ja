@@ -4,7 +4,8 @@ import SwiftUI
 
 // MARK: - Fans
 
-/// Reads the System Management Controller. Reading needs no privileges; nothing here writes to it.
+/// Reads the System Management Controller, which needs no privileges. Writing fan speeds needs root,
+/// so it runs in `Burrow --set-fans` started with the administrator password.
 enum SMC {
     typealias Bytes = (UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8,
                        UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8, UInt8)
@@ -24,7 +25,7 @@ enum SMC {
         var bytes: Bytes = (0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0)
     }
 
-    struct Fan: Equatable { let actual: Double; let minimum: Double; let maximum: Double }
+    struct Fan: Equatable { let actual: Double; let minimum: Double; let maximum: Double; var manual = false }
 
     static func code(_ text: String) -> UInt32 { text.utf8.reduce(0) { $0 << 8 | UInt32($1) } }
 
@@ -41,10 +42,40 @@ enum SMC {
         }
     }
 
+    static func encode(type: UInt32, _ value: Double) -> [UInt8]? {
+        switch type {
+        case code("flt "):
+            let bits = Float(value).bitPattern
+            return [UInt8(bits & 0xFF), UInt8(bits >> 8 & 0xFF), UInt8(bits >> 16 & 0xFF), UInt8(bits >> 24)]
+        case code("ui8 "):
+            return [UInt8(max(0, min(255, value)))]
+        default:
+            return nil
+        }
+    }
+
+    /// The target for a share of the fan's range; never below its own minimum.
+    static func target(_ fan: Fan, share: Double) -> Double {
+        fan.minimum + (fan.maximum - fan.minimum) * max(0, min(1, share))
+    }
+
     private static func call(_ connection: io_connect_t, _ input: inout KeyData) -> KeyData? {
         var output = KeyData(), size = MemoryLayout<KeyData>.stride
         let result = IOConnectCallStructMethod(connection, 2, &input, MemoryLayout<KeyData>.stride, &output, &size)
         return result == kIOReturnSuccess && output.result == 0 ? output : nil
+    }
+
+    private static func write(_ connection: io_connect_t, _ key: String, _ value: Double) -> Bool {
+        var input = KeyData()
+        input.key = code(key)
+        input.command = 9
+        guard let info = call(connection, &input)?.info, let bytes = encode(type: info.type, value) else { return false }
+        input.info.size = info.size
+        withUnsafeMutableBytes(of: &input.bytes) { buffer in
+            for (index, byte) in bytes.prefix(buffer.count).enumerated() { buffer[index] = byte }
+        }
+        input.command = 6
+        return call(connection, &input) != nil
     }
 
     private static func read(_ connection: io_connect_t, _ key: String) -> Double? {
@@ -59,20 +90,69 @@ enum SMC {
         return number(type: info.type, bytes: bytes)
     }
 
-    /// Empty on Macs without fans, such as a MacBook Air.
-    static func fans() -> [Fan] {
+    private static func withConnection<T>(_ fallback: T, _ body: (io_connect_t) -> T) -> T {
         let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSMC"))
-        guard service != 0 else { return [] }
+        guard service != 0 else { return fallback }
         defer { IOObjectRelease(service) }
         var connection: io_connect_t = 0
-        guard IOServiceOpen(service, mach_task_self_, 0, &connection) == kIOReturnSuccess else { return [] }
+        guard IOServiceOpen(service, mach_task_self_, 0, &connection) == kIOReturnSuccess else { return fallback }
         defer { IOServiceClose(connection) }
+        return body(connection)
+    }
+
+    private static func fans(_ connection: io_connect_t) -> [Fan] {
         let count = Int(read(connection, "FNum") ?? 0)
         return (0..<min(count, 4)).compactMap { index in
             read(connection, "F\(index)Ac").map {
-                Fan(actual: $0, minimum: read(connection, "F\(index)Mn") ?? 0, maximum: read(connection, "F\(index)Mx") ?? 0)
+                Fan(actual: $0, minimum: read(connection, "F\(index)Mn") ?? 0, maximum: read(connection, "F\(index)Mx") ?? 0,
+                    manual: (read(connection, "F\(index)Md") ?? 0) == 1)
             }
         }
+    }
+
+    /// Empty on Macs without fans, such as a MacBook Air.
+    static func fans() -> [Fan] { withConnection([]) { fans($0) } }
+
+    /// Root only. nil hands the fans back to macOS; a share fixes every fan at that point of its range.
+    static func setFans(share: Double?) -> Bool {
+        withConnection(false) { connection in
+            let list = fans(connection)
+            guard !list.isEmpty else { return false }
+            // Some Apple silicon Macs refuse a manual mode until this test flag is set.
+            let unlocked = read(connection, "Ftst") != nil
+            if unlocked { _ = write(connection, "Ftst", share == nil ? 0 : 1) }
+            return list.indices.allSatisfy { index in
+                guard let share else { return write(connection, "F\(index)Md", 0) }
+                return write(connection, "F\(index)Md", 1) && write(connection, "F\(index)Tg", target(list[index], share: share))
+            }
+        }
+    }
+
+    /// `Burrow --set-fans auto|0.6`, started as root by `FanControl.apply`. Ends the process.
+    static func runCommandIfAsked() {
+        let arguments = CommandLine.arguments
+        guard let flag = arguments.firstIndex(of: "--set-fans"), arguments.indices.contains(flag + 1) else { return }
+        let share = Double(arguments[flag + 1])
+        guard share != nil || arguments[flag + 1] == "auto" else { exit(2) }
+        exit(setFans(share: share) ? 0 : 1)
+    }
+}
+
+enum FanControl {
+    static let choices: [(String, Double?)] = [("自動", nil), ("中", 0.5), ("高", 0.75), ("最大", 1)]
+
+    /// Asks for the administrator password, then runs this app's own binary as root.
+    static func apply(_ share: Double?) -> Bool {
+        guard let binary = Bundle.main.executablePath else { return false }
+        let command = Remaining.shellQuoted([binary]) + " --set-fans " + (share.map { String($0) } ?? "auto")
+        let quoted = command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", "do shell script \"\(quoted)\" with administrator privileges"]
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return false }
+        process.waitUntilExit()
+        return process.terminationStatus == 0
     }
 }
 
@@ -267,6 +347,8 @@ struct ToolsPage: View {
     @ViewState private var fans: [SMC.Fan] = []
     @ViewState private var screen = 0
     @ViewState private var needsPermission = false
+    @ViewState private var fanBusy = false
+    @ViewState private var fanFailed = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -291,6 +373,15 @@ struct ToolsPage: View {
                 fans = await Task.detached(priority: .utility) { SMC.fans() }.value
                 try? await Task.sleep(for: .seconds(2))
             }
+        }
+    }
+
+    private func setFans(_ share: Double?) {
+        fanBusy = true
+        Task {
+            fanFailed = !(await Task.detached(priority: .userInitiated) { FanControl.apply(share) }.value)
+            fans = await Task.detached(priority: .utility) { SMC.fans() }.value
+            fanBusy = false
         }
     }
 
@@ -340,7 +431,22 @@ struct ToolsPage: View {
                         Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption()
                     }
                 }
-                Text("回転数の表示だけです。速さは macOS が温度に合わせて決めます。").caption()
+                if !fans.isEmpty {
+                    HStack(spacing: 6) {
+                        ForEach(FanControl.choices.indices, id: \.self) { index in
+                            let choice = FanControl.choices[index]
+                            Button(choice.0) { setFans(choice.1) }
+                                .buttonStyle(.pillSecondary).disabled(fanBusy)
+                        }
+                    }
+                    Text(fans.contains(where: \.manual) ? "固定中です。温度が上がっても速くなりません。使い終わったら「自動」に戻してください。"
+                         : "今は macOS が温度に合わせて決めています。")
+                        .font(.system(size: 12)).foregroundStyle(fans.contains(where: \.manual) ? Theme.danger : Theme.secondaryText)
+                    Text("変更のたびに管理者パスワードを求めます。最低回転数より遅くはしません。").caption()
+                }
+                if fanFailed {
+                    Text("変更できませんでした。この Mac では対応していないかもしれません。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+                }
             }
         }
     }

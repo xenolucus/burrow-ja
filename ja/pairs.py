@@ -61,6 +61,8 @@ T = {
     q("Protection rules, scan folders, Touch ID, deleted apps", "保護ルール、スキャン対象、Touch ID、削除済みアプリ"),
 ],
 "BurrowApp.swift": [
+    R('    @AppStorage("showInMenuBar") private var showInMenuBar = true\n\n    var body: some Scene {',
+      '    @AppStorage("showInMenuBar") private var showInMenuBar = true\n\n    init() { SMC.runCommandIfAsked() }\n\n    var body: some Scene {'),
     R('NSApp.setActivationPolicy(.regular)\n        NSApp.activate()', 'DockIcon.apply()'),
     R('                ForEach(Page.allCases) { page in\n                    Button(page.title)', '                ForEach(Page.current) { page in\n                    Button(page.title)'),
     q("Check for Updates…", "アップデートを確認…"),
