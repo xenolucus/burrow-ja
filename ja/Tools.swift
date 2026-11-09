@@ -87,6 +87,9 @@ enum SMC {
     }
 
     /// The target for a share of the fan's range; never below its own minimum.
+    /// A fan that reports no usable range is left to macOS.
+    static func canControl(_ fan: Fan) -> Bool { fan.maximum > fan.minimum && fan.minimum >= 0 }
+
     static func target(_ fan: Fan, share: Double) -> Double {
         fan.minimum + (fan.maximum - fan.minimum) * max(0, min(1, share))
     }
@@ -133,7 +136,11 @@ enum SMC {
     }
 
     /// Every key whose name starts with T, found once by walking the whole key table.
-    nonisolated(unsafe) private static var temperatureKeys: [String]?
+    /// A static let runs its initializer once, even when two readings start together.
+    private static let temperatureKeys: [String] = withConnection([]) { connection in
+        let count = Int(read(connection, "#KEY") ?? 0)
+        return (0..<min(count, 6000)).compactMap { key(connection, at: $0) }.filter { $0.hasPrefix("T") }
+    }
 
     private static func key(_ connection: io_connect_t, at index: Int) -> String? {
         var input = KeyData()
@@ -143,12 +150,9 @@ enum SMC {
     }
 
     static func temperatures() -> [Temperature] {
-        withConnection([]) { connection in
-            if temperatureKeys == nil {
-                let count = Int(read(connection, "#KEY") ?? 0)
-                temperatureKeys = (0..<min(count, 6000)).compactMap { key(connection, at: $0) }.filter { $0.hasPrefix("T") }
-            }
-            return group((temperatureKeys ?? []).compactMap { key in read(connection, key).map { (key: key, celsius: $0) } })
+        let keys = temperatureKeys
+        return withConnection([]) { connection in
+            group(keys.compactMap { key in read(connection, key).map { (key: key, celsius: $0) } })
         }
     }
 
@@ -169,7 +173,7 @@ enum SMC {
     static func setFans(share: Double?) -> Bool {
         withConnection(false) { connection in
             let list = fans(connection)
-            guard !list.isEmpty else { return false }
+            guard !list.isEmpty, share == nil || list.allSatisfy(canControl) else { return false }
             // Some Apple silicon Macs refuse a manual mode until this test flag is set.
             let unlocked = read(connection, "Ftst") != nil
             if unlocked { _ = write(connection, "Ftst", share == nil ? 0 : 1) }
@@ -311,6 +315,8 @@ final class FrameMeter {
         case .keyboard: screens = NSScreen.main.map { [$0] } ?? []
         case .wipe: screens = NSScreen.screens
         }
+        // A screen unplugged after it was picked: nothing to cover, and the cursor must not stay hidden.
+        guard !screens.isEmpty else { self.mode = nil; return }
         for screen in screens {
             let window = CoverWindow(contentRect: screen.frame, styleMask: .borderless, backing: .buffered, defer: false)
             window.level = .screenSaver
@@ -359,7 +365,8 @@ final class FrameMeter {
         switch mode {
         case .wipe:
             // Two presses, so a cloth leaning on the keyboard does not end it.
-            if event.keyCode == 53 { escapes += 1 }
+            // keyCode raises on a mouse event, so check the type first.
+            if event.type == .keyDown, event.keyCode == 53 { escapes += 1 }
             if escapes >= 2 { stop() }
         case .monitor:
             if event.type == .keyDown, event.keyCode == 53 { return stop() }
@@ -729,7 +736,7 @@ struct ToolsPage: View {
                         Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption()
                     }
                 }
-                if let first = fans.first {
+                if let first = fans.first, SMC.canControl(first) {
                     HStack(spacing: 10) {
                         Slider(value: $fanShare, in: 0...1, onEditingChanged: { editing in
                             if !editing { setFans(fanShare) }

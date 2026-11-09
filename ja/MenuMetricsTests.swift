@@ -256,6 +256,7 @@ struct MenuMetricsTests {
         let encoded = SMC.encode(type: SMC.code("flt "), 2000) ?? []
         #expect(SMC.number(type: SMC.code("flt "), bytes: encoded) == 2000)
         let fan = SMC.Fan(actual: 0, minimum: 1000, maximum: 5000)
+        #expect(SMC.canControl(fan) && !SMC.canControl(SMC.Fan(actual: 0, minimum: 1000, maximum: 0)))
         #expect(SMC.target(fan, share: 0.5) == 3000 && SMC.target(fan, share: -1) == 1000 && SMC.target(fan, share: 2) == 5000)
     }
 
