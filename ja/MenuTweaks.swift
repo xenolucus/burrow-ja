@@ -12,6 +12,17 @@ struct MenuTweak: Codable, Equatable {
     var x = 0.0
     var y = 0.0
 
+    init() {}
+
+    /// Missing fields take their defaults, so a saved tweak from another version still loads.
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        symbol = try container.decodeIfPresent(String.self, forKey: .symbol)
+        scale = try container.decodeIfPresent(Double.self, forKey: .scale) ?? 1
+        x = try container.decodeIfPresent(Double.self, forKey: .x) ?? 0
+        y = try container.decodeIfPresent(Double.self, forKey: .y) ?? 0
+    }
+
     static func load(_ text: String) -> [String: MenuTweak] {
         (try? JSONDecoder().decode([String: MenuTweak].self, from: Data(text.utf8))) ?? [:]
     }

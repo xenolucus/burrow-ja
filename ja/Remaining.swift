@@ -41,7 +41,9 @@ enum Remaining {
             guard reason != "protected" || parts.count == 3 else { return nil }
             (keep, owner) = (3, parts[2])
         } else if parts.count >= 7, Array(parts[0...1]) == ["Library", "Containers"], Array(parts[3...5]) == ["Data", "Library", "Caches"] {
-            (keep, owner) = (6, parts[2])
+            // One folder inside the app's caches, never the whole Caches folder.
+            guard reason != "protected" || parts.count == 7 else { return nil }
+            (keep, owner) = (7, parts[2])
         } else if parts.count >= 3, reason == "permission denied", Array(parts[0...1]) == [".npm", "_cacache"] {
             (keep, owner) = (3, "npm")
         } else {

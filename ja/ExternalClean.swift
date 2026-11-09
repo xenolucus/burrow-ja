@@ -3,7 +3,8 @@ import SwiftUI
 
 /// Experimental: `mo clean --external` removes only OS metadata (.DS_Store, ._* files and temporary
 /// folders) and refuses internal volumes. Caches there are found here instead, because Mole does
-/// not look for them; they are listed unselected and only ever go to the volume's Trash.
+/// not look for them. Like the main clean they start selected (except a drive's Library and Adobe temp
+/// files in use) and are removed for good, not moved to the drive's Trash.
 enum ExternalDrives {
     static let enabledKey = "experimentalExternalClean"
 

@@ -57,6 +57,8 @@ enum DuplicateFinder {
             for case let url as URL in walker {
                 if Task.isCancelled { return [] }
                 if skipped.contains(url.lastPathComponent) { walker.skipDescendants(); continue }
+                // A repository's files are tracked as a set: trashing one "copy" breaks the project.
+                if FileManager.default.fileExists(atPath: url.appendingPathComponent(".git").path) { walker.skipDescendants(); continue }
                 guard let values = try? url.resourceValues(forKeys: Set(keys)), values.isRegularFile == true,
                       let size = values.fileSize, Int64(size) >= minBytes,
                       // Hashing a file that lives in iCloud would download it.
@@ -164,7 +166,7 @@ struct DuplicatesPage: View {
                     if !chosenDrives.isEmpty {
                         Text("外付けドライブ全体を比べるので時間がかかることがあります。ゴミ箱に入れた分は、そのドライブのゴミ箱を空にすると空きます。").caption()
                     }
-                    Text("1 MB 以上のファイルの中身を比べます。隠しファイル、アプリの中、node_modules などは対象外です。iCloud に置いたままのファイルも比べません。").caption()
+                    Text("1 MB 以上のファイルの中身を比べます。隠しファイル、アプリの中、Git のリポジトリ、node_modules などは対象外です。iCloud に置いたままのファイルも比べません。").caption()
                     HStack {
                         Spacer()
                         Button(scanTask == nil ? "探す" : "中止") { scanTask == nil ? start() : stop() }.buttonStyle(.pill)
@@ -290,7 +292,12 @@ struct DuplicatesPage: View {
         let list = chosen
         confirm = .init(title: "\(list.reduce(Int64(0)) { $0 + $1.bytes }.bytesText) をゴミ箱に入れますか？",
                         message: "\(list.count) 項目をゴミ箱に入れます。各組の残りのファイルはそのままです。", button: "ゴミ箱に入れる") {
-            let stuck = Trash.move(list.map(\.path))
+            // A file edited since the scan is no longer the copy that was compared.
+            let unchanged = list.filter { file in
+                let values = try? URL(fileURLWithPath: file.path).resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                return values?.fileSize.map(Int64.init) == file.bytes && values?.contentModificationDate == file.modified
+            }
+            let stuck = Trash.move(unchanged.map(\.path)) + list.filter { !unchanged.contains($0) }.map(\.path)
             failed = stuck.count
             let gone = Set(list.map(\.path)).subtracting(stuck)
             selected = []

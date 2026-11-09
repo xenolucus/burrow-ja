@@ -344,6 +344,9 @@ struct MenuMetricsTests {
         try Data(repeating: 1, count: 10).write(to: root.appendingPathComponent("tiny1"))
         try Data(repeating: 1, count: 10).write(to: root.appendingPathComponent("tiny2"))
         try FileManager.default.linkItem(at: root.appendingPathComponent("a.bin"), to: root.appendingPathComponent("hardlink.bin"))
+        let repo = root.appendingPathComponent("project")
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try one.write(to: repo.appendingPathComponent("tracked.bin"))
         let groups = DuplicateFinder.scan([root])
         #expect(groups.count == 1)
         #expect(groups[0].files.count == 2)
@@ -372,7 +375,8 @@ struct MenuMetricsTests {
         #expect(top("/h/Library/Logs/OneDrive") == "/h/Library/Logs/OneDrive")
         #expect(top("/h/Library/Caches/notion.id/Cache.db", "live user cache") == "/h/Library/Caches/notion.id")
         #expect(top("/h/Library/Containers/jp.naver.line.mac/Data/Library/Caches/WebKit", "live user cache")
-            == "/h/Library/Containers/jp.naver.line.mac/Data/Library/Caches")
+            == "/h/Library/Containers/jp.naver.line.mac/Data/Library/Caches/WebKit")
+        #expect(top("/h/Library/Containers/a.b/Data/Library/Caches/x/y.db") == nil)
         #expect(top("/h/.npm/_cacache/content-v2", "permission denied") == "/h/.npm/_cacache/content-v2")
         #expect(top("/h/Library/Caches/com.apple.akd") == nil)
         #expect(top("/h/Library/Containers/com.apple.x/Data/Library/Caches/y", "live user cache") == nil)
@@ -442,6 +446,11 @@ struct MenuMetricsTests {
         var badge: [UInt8] = [220, 220, 220, 255, 10, 10, 10, 255, 220, 40, 40, 255, 220, 220, 220, 255]
         MenuIconCleaner.clean(&badge, width: 4, height: 1)
         #expect(badge[8] > badge[9])
+    }
+
+    @Test func reorderingKeepsHiddenPagesInPlace() {
+        #expect(Page.keepingHidden([.clean, .overview], in: [.overview, .drives, .clean]) == [.clean, .drives, .overview])
+        #expect(MenuTweak.load(#"{"cpu":{"scale":1.2}}"#)["cpu"]?.scale == 1.2)
     }
 
     @Test func sidebarOrderAndExtras() {

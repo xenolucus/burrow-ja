@@ -665,17 +665,17 @@ struct ToolsPage: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("温度", systemImage: "thermometer.medium").cardTitle()
                 if temperatures.isEmpty {
-                    Text("温度センサーを読めませんでした。").caption()
+                    Text("温度センサーを読めませんでした。").caption().fixedSize(horizontal: false, vertical: true)
                 }
                 ForEach(temperatures, id: \.place) { item in
                     HStack {
                         Text(item.place).font(.system(size: 13))
                         Spacer()
                         Text(String(format: "%.1f℃", item.average)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                        Text(String(format: "最高 %.0f℃・%d 個", item.maximum, item.count)).caption().frame(width: 96, alignment: .trailing)
+                        Text(String(format: "最高 %.0f℃・%d 個", item.maximum, item.count)).caption().fixedSize(horizontal: false, vertical: true).frame(width: 96, alignment: .trailing)
                     }
                 }
-                Text("Mac に外気温のセンサーはありません。「吸気」が本体に入る空気の温度で、外気にいちばん近い値です。項目の分け方はセンサー名からの推定です。").caption()
+                Text("Mac に外気温のセンサーはありません。「吸気」が本体に入る空気の温度で、外気にいちばん近い値です。項目の分け方はセンサー名からの推定です。").caption().fixedSize(horizontal: false, vertical: true)
             }
         }
     }
@@ -693,7 +693,7 @@ struct ToolsPage: View {
         GlowCard(glow: .violet, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 Label(title, systemImage: symbol).cardTitle()
-                Text(detail).caption()
+                Text(detail).caption().fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Spacer()
                     Button(button, action: action).buttonStyle(.pill)
@@ -706,7 +706,7 @@ struct ToolsPage: View {
         GlowCard(glow: .violet, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 10) {
                 Label("モニターのチェック", systemImage: "display").cardTitle()
-                Text("RGB の各色 100%、カラーバー、グラデーション、黒と白の限界、ガンマ、1 ピクセルの模様、文字、格子、動きとフレームレートの \(MonitorPattern.allCases.count) 種類を順に確かめます。P で sRGB と Display P3 を切り替えます。").caption()
+                Text("RGB の各色 100%、カラーバー、グラデーション、黒と白の限界、ガンマ、1 ピクセルの模様、文字、格子、動きとフレームレートの \(MonitorPattern.allCases.count) 種類を順に確かめます。P で sRGB と Display P3 を切り替えます。").caption().fixedSize(horizontal: false, vertical: true)
                 HStack {
                     Picker("画面", selection: $screen) {
                         ForEach(NSScreen.screens.indices, id: \.self) { Text(NSScreen.screens[$0].localizedName).tag($0) }
@@ -724,7 +724,7 @@ struct ToolsPage: View {
             VStack(alignment: .leading, spacing: 10) {
                 Label("ファン", systemImage: "fan").cardTitle()
                 if self.fans?.isEmpty == true {
-                    Text("このデバイスにはファンが搭載されていません。").caption()
+                    Text("このデバイスにはファンが搭載されていません。").caption().fixedSize(horizontal: false, vertical: true)
                 }
                 let fans = self.fans ?? []
                 ForEach(fans.indices, id: \.self) { index in
@@ -733,7 +733,7 @@ struct ToolsPage: View {
                         Text("ファン \(index + 1)").font(.system(size: 13))
                         Spacer()
                         Text("\(Int(fan.actual)) rpm").font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                        Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption()
+                        Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption().fixedSize(horizontal: false, vertical: true)
                     }
                 }
                 if let first = fans.first, SMC.canControl(first) {
@@ -746,11 +746,11 @@ struct ToolsPage: View {
                             .frame(width: 76, alignment: .trailing)
                         Button("自動") { setFans(nil) }.buttonStyle(.pillSecondary).disabled(fanBusy)
                     }
-                    Text("スライダーを離すと反映します。ファンが2つあれば、どちらも同じ割合にします。").caption()
+                    Text("スライダーを離すと反映します。ファンが2つあれば、どちらも同じ割合にします。").caption().fixedSize(horizontal: false, vertical: true)
                     Text(fans.contains(where: \.manual) ? "固定中です。温度が上がっても速くなりません。使い終わったら「自動」に戻してください。"
                          : "今は macOS が温度に合わせて決めています。")
                         .font(.system(size: 12)).foregroundStyle(fans.contains(where: \.manual) ? Theme.danger : Theme.secondaryText)
-                    Text("変更のたびに管理者パスワードを求めます。最低回転数より遅くはしません。").caption()
+                    Text("変更のたびに管理者パスワードを求めます。最低回転数より遅くはしません。").caption().fixedSize(horizontal: false, vertical: true)
                 }
                 if fanFailed {
                     Text("変更できませんでした。この Mac では対応していないかもしれません。").font(.system(size: 12)).foregroundStyle(Theme.danger)
@@ -804,7 +804,7 @@ struct TrashCard: View {
                 GlowCard(glow: .ember, style: .rim, padding: 22) {
                     VStack(alignment: .leading, spacing: 10) {
                         Text("ゴミ箱").cardTitle()
-                        Text("Mole は Mac のゴミ箱だけを空にします。外付けドライブと iCloud Drive のゴミ箱は Finder で空にします。").caption()
+                        Text("Mole は Mac のゴミ箱だけを空にします。外付けドライブと iCloud Drive のゴミ箱は Finder で空にします。").caption().fixedSize(horizontal: false, vertical: true)
                         ForEach(places) { place in
                             HStack {
                                 Text(place.name).font(.system(size: 13))

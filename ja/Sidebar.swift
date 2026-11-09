@@ -30,6 +30,12 @@ extension Page {
         (UserDefaults.standard.string(forKey: hiddenKey) ?? "").split(separator: ",").contains(Substring(page.rawValue))
     }
 
+    /// Puts `visible` back into `all`, leaving hidden pages where they were.
+    static func keepingHidden(_ visible: [Page], in all: [Page]) -> [Page] {
+        var rest = visible[...]
+        return all.map { page in visible.contains(page) ? rest.popFirst() ?? page : page }
+    }
+
     /// The new order after moving `page` by `offset`, or nil at either end.
     static func moved(_ page: Page, by offset: Int, in order: [Page]) -> [Page]? {
         guard let index = order.firstIndex(of: page), order.indices.contains(index + offset) else { return nil }
@@ -80,7 +86,7 @@ struct ContentCard: View {
     private func arrow(_ symbol: String, _ label: String, _ page: Page, by offset: Int) -> some View {
         let result = Page.moved(page, by: offset, in: pages)
         return Button {
-            if let result { order = result.map(\.rawValue).joined(separator: ",") }
+            if let result { order = Page.keepingHidden(result, in: Page.main(order: order, hidden: "")).map(\.rawValue).joined(separator: ",") }
         } label: {
             Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 22).contentShape(Rectangle())
         }
