@@ -28,7 +28,9 @@ struct MenuTweak: Codable, Equatable {
     static func load(_ text: String) -> [String: MenuTweak] {
         guard let raw = (try? JSONSerialization.jsonObject(with: Data(text.utf8))) as? [String: Any] else { return [:] }
         return raw.compactMapValues { value in
-            (try? JSONSerialization.data(withJSONObject: value)).flatMap { try? JSONDecoder().decode(MenuTweak.self, from: $0) }
+            // A null or bare value would make JSONSerialization raise instead of throw.
+            guard JSONSerialization.isValidJSONObject(value) else { return nil }
+            return (try? JSONSerialization.data(withJSONObject: value)).flatMap { try? JSONDecoder().decode(MenuTweak.self, from: $0) }
         }
     }
 
