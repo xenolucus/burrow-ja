@@ -405,6 +405,15 @@ struct MenuMetricsTests {
         #expect(find(beta, [beta.path, beta.orphanOf!])?.removable == false)
     }
 
+    @Test func systemDataMeasuresChildrenAndSkipsExcludedOnes() {
+        let part = SystemDataPart(name: "x", roots: ["~/A", "/B"], exclude: ["~/A/skip"])
+        let tree = ["/h/A": ["big", "skip", "small"], "/B": ["c"]]
+        let sizes: [String: Int64] = ["/h/A/big": 3_000_000_000, "/h/A/skip": 9_000_000_000, "/h/A/small": 1_000, "/B/c": 1_000_000_000]
+        let found = SystemData.measure(part, home: "/h", children: { tree[$0] ?? [] }, size: { sizes[$0] ?? 0 })
+        #expect(found.bytes == 4_000_001_000)
+        #expect(found.top.map(\.name) == ["big", "c"])
+    }
+
     @Test func remainingQuotesPathsForTheShell() {
         #expect(Remaining.shellQuoted(["/h/a b", "/h/it's"]) == "'/h/a b' '/h/it'\\''s'")
     }
@@ -474,7 +483,7 @@ struct MenuMetricsTests {
     }
 
     @Test func sidebarOrderAndExtras() {
-        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .duplicates, .slim, .menubar, .tools]
+        let standard: [Page] = [.overview, .clean, .uninstall, .optimize, .analyze, .projects, .installers, .drives, .systemdata, .duplicates, .slim, .menubar, .tools]
         #expect(Page.main(order: "", hidden: "") == standard)
         #expect(Page.sidebar(order: "", hidden: "").suffix(3) == [.history, .totals, .settings])
         let reordered = Page.main(order: "clean,overview", hidden: "drives,menubar")
