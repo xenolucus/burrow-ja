@@ -81,6 +81,7 @@ struct DrivesPage: View {
     @ViewState private var drives: [URL] = []
     @ViewState private var scanning: URL?
     @ViewState private var videos: [String: [OldVideo]] = [:]
+    @ViewState private var infos: [URL: DriveInfo] = [:]
 
     private let mounts = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didMountNotification)
     private let unmounts = NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didUnmountNotification)
@@ -96,10 +97,19 @@ struct DrivesPage: View {
         .onAppear { drives = ExternalDrives.mounted() }
         .onReceive(mounts) { _ in drives = ExternalDrives.mounted() }
         .onReceive(unmounts) { _ in drives = ExternalDrives.mounted() }
+        .task(id: drives) { await loadInfos() }
+    }
+
+    /// `diskutil` runs off the main thread: waiting for it inside `body` re-entered SwiftUI and crashed the app.
+    private func loadInfos() async {
+        let list = drives
+        infos = await Task.detached(priority: .utility) {
+            Dictionary(uniqueKeysWithValues: list.compactMap { drive in DriveInfo.read(drive).map { (drive, $0) } })
+        }.value
     }
 
     private func card(_ drive: URL) -> some View {
-        let info = DriveInfo.read(drive)
+        let info = infos[drive]
         return GlowCard(glow: .blue, style: .rim, padding: 22) {
             VStack(alignment: .leading, spacing: 12) {
                 HStack {
@@ -112,6 +122,8 @@ struct DrivesPage: View {
                     row("モデル", info.model)
                     row("接続", "\(info.connection) / \(info.fileSystem)")
                     row("空き容量", "\(info.free.bytesText) / \(info.total.bytesText)")
+                } else {
+                    Text("ドライブの情報を読み込んでいます…").caption()
                 }
                 if scanning == drive { Text("確認しています（最大30秒）…").caption() }
                 if let list = videos[drive.path] { videoList(list) }
