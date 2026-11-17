@@ -135,6 +135,7 @@ def main():
     shutil.copy2(KIT / "Sidebar.swift", sources / "Sidebar.swift")
     shutil.copy2(KIT / "MaxClean.swift", sources / "MaxClean.swift")
     shutil.copy2(KIT / "Remaining.swift", sources / "Remaining.swift")
+    shutil.copy2(KIT / "SystemData.swift", sources / "SystemData.swift")
     shutil.copy2(KIT / "Alerts.swift", sources / "Alerts.swift")
     shutil.copy2(KIT / "Tools.swift", sources / "Tools.swift")
     shutil.copy2(KIT / "MenuTweaks.swift", sources / "MenuTweaks.swift")

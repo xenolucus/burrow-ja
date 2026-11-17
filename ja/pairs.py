@@ -141,6 +141,10 @@ T = {
 
             RemainingCard(confirm: $confirm, refresh: scan.finishedAt)
 
+            RemainingCard(confirm: $confirm, refresh: scan.finishedAt, title: "システムデータの大物",
+                          caption: "macOS が「システムデータ」に数える大きなフォルダのうち、Mole が消さないものです。選んだものだけ完全に削除します。チェックできない項目は、説明の方法で空けられます。",
+                          load: SystemData.scan)
+
             ExternalCleanCard(model: model, confirm: $confirm)
 
             if let report {

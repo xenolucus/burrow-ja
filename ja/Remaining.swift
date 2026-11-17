@@ -8,6 +8,9 @@ struct RemainingItem: Identifiable, Hashable, Sendable {
     let owner: String
     let bytes: Int64
     let needsAdmin: Bool
+    var note: String? = nil
+    /// False for rows that only point the user elsewhere.
+    var removable = true
     var id: String { path }
 }
 
@@ -117,6 +120,9 @@ struct RemainingCard: View {
     /// The page's alert: a second `.alert` inside it never appears.
     @Binding var confirm: ConfirmAction?
     let refresh: Date?
+    var title = "Mole が残した項目"
+    var caption = "Mole が保護した項目や、削除できなかった項目です。選んだものだけ完全に削除します。Apple のシステム用の項目は表示しません。"
+    var load: @Sendable () -> [RemainingItem] = Remaining.scan
     @ViewState private var items: [RemainingItem] = []
     @ViewState private var selected = Set<String>()
     @ViewState private var showAll = false
@@ -129,7 +135,7 @@ struct RemainingCard: View {
     private func running(_ owner: String) -> [NSRunningApplication] {
         NSWorkspace.shared.runningApplications.filter { app in
             guard let id = app.bundleIdentifier else { return false }
-            return owner == id || owner.hasPrefix(id + ".")
+            return !owner.isEmpty && (owner == id || owner.hasPrefix(id + ".") || id.hasPrefix(owner + "."))
         }
     }
 
@@ -138,8 +144,8 @@ struct RemainingCard: View {
             if !items.isEmpty {
                 GlowCard(glow: .ember, style: .rim, padding: 22) {
                     VStack(alignment: .leading, spacing: 10) {
-                        Text("Mole が残した項目").cardTitle()
-                        Text("Mole が保護した項目や、削除できなかった項目です。選んだものだけ完全に削除します。Apple のシステム用の項目は表示しません。").caption()
+                        Text(title).cardTitle()
+                        Text(caption).caption()
                         ForEach(shown) { row($0) }
                         if items.count > shown.count {
                             Button("すべて表示（\(items.count)件）") { showAll = true }.buttonStyle(.link).font(.system(size: 12))
@@ -165,7 +171,9 @@ struct RemainingCard: View {
             }) {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: item.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
-                    if item.owner == "com.spotify.client" {
+                    if let note = item.note {
+                        Text(note).caption()
+                    } else if item.owner == "com.spotify.client" {
                         Text("オフライン保存した音楽も消える場合があります。").caption()
                     } else if !running(item.owner).isEmpty {
                         Text("起動中です。削除するときに終了します。").caption()
@@ -173,6 +181,7 @@ struct RemainingCard: View {
                 }
             }
             .toggleStyle(.checkbox)
+            .disabled(!item.removable)
             Spacer()
             Text(item.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
             Button("Finder で表示") { NSWorkspace.shared.selectFile(item.path, inFileViewerRootedAtPath: "") }
@@ -181,9 +190,10 @@ struct RemainingCard: View {
     }
 
     private func reload() async {
-        let found = await Task.detached(priority: .utility) { Remaining.scan() }.value
+        let load = load
+        let found = await Task.detached(priority: .utility) { load() }.value
         items = found
-        selected.formIntersection(found.map(\.id))
+        selected.formIntersection(found.filter(\.removable).map(\.id))
     }
 
     private func ask() {

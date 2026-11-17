@@ -389,6 +389,22 @@ struct MenuMetricsTests {
         #expect(top("/h/.npm/_cacache/content-v2") == nil)
     }
 
+    @Test func systemDataOffersOnlyBigFoldersAndKeepsInstalledBetas() {
+        let home = "/h"
+        let gb: Int64 = 1_000_000_000
+        func find(_ entry: SystemData.Entry, _ present: Set<String>, _ bytes: Int64 = gb) -> RemainingItem? {
+            SystemData.item(entry, home: home, exists: present.contains, size: { _ in bytes })
+        }
+        let steam = SystemData.entries[0]
+        #expect(find(steam, ["/h/Library/Application Support/Steam/steamapps/shadercache"])?.removable == true)
+        #expect(find(steam, ["/h/Library/Application Support/Steam/steamapps/shadercache"], 1_000) == nil)
+        #expect(find(steam, []) == nil)
+        let beta = SystemData.entries.first { $0.path.hasPrefix("/Library/") && $0.orphanOf != nil }!
+        let orphan = find(beta, [beta.path])
+        #expect(orphan?.removable == true && orphan?.needsAdmin == true)
+        #expect(find(beta, [beta.path, beta.orphanOf!])?.removable == false)
+    }
+
     @Test func remainingQuotesPathsForTheShell() {
         #expect(Remaining.shellQuoted(["/h/a b", "/h/it's"]) == "'/h/a b' '/h/it'\\''s'")
     }
