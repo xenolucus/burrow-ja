@@ -918,7 +918,11 @@ clean_clang_module_cache() {
     local resolver_rc=0
     darwin_user_cache=$(mole_darwin_user_cache_root) || resolver_rc=$?
     if [[ $resolver_rc -ne 0 ]]; then
-        mole_rc_timeout_or_signal "$resolver_rc" && return "$resolver_rc"
+        if mole_rc_timeout "$resolver_rc"; then
+            debug_log "Skipping Clang module cache: DARWIN_USER_CACHE_DIR lookup timed out"
+            return 0
+        fi
+        mole_rc_signal "$resolver_rc" && return "$resolver_rc"
         return 0
     fi
 
@@ -4404,6 +4408,44 @@ clean_dev_ai_agents() {
     clean_claude_desktop_bundled_versions "$keep_previous"
 }
 
+dart_analysis_process_state() {
+    # The analyzer can run as a VM snapshot or an AOT executable. Keep the
+    # cache while any Dart runtime runs, including copies outside PATH.
+    mole_pgrep_any \
+        -x dart \
+        -x dartvm \
+        -x dartaotruntime \
+        -x dart_aot_runtime \
+        -x analysis_server \
+        -f '(^|/)analysis_server(_aot)?[.]dart[.]snapshot([[:space:]]|$)'
+}
+
+# Dart's createByteStore uses this leaf for rebuildable analysis data.
+# Keep .dartServer and its other children, including plugins and .analysis-cache.
+clean_dart_analysis_cache() {
+    local container_root="$HOME/.dartServer"
+    local cache_root="$container_root/.analysis-driver"
+    [[ -d "$container_root" && ! -L "$container_root" &&
+        -d "$cache_root" && ! -L "$cache_root" ]] || return 0
+
+    local -a candidates=()
+    local candidate
+    for candidate in "$cache_root"/* "$cache_root"/.[!.]* "$cache_root"/..?*; do
+        [[ -e "$candidate" || -L "$candidate" ]] || continue
+        [[ ! -L "$candidate" ]] || continue
+        candidates+=("$candidate")
+    done
+    [[ ${#candidates[@]} -gt 0 ]] || return 0
+
+    clean_guarded_dev_cache_root \
+        "$container_root" \
+        "$cache_root" \
+        dart_analysis_process_state \
+        "Dart" \
+        "Dart analysis cache" \
+        "${candidates[@]}"
+}
+
 # Other language tool caches.
 clean_dev_other_langs() {
     safe_clean ~/.composer/cache/* "PHP Composer cache (legacy)"
@@ -4414,12 +4456,13 @@ clean_dev_other_langs() {
     # build. Both stay off the delete path and are surfaced by
     # `check_large_file_candidates` (lib/clean/user.sh) for review instead.
     # safe_clean ~/.pub-cache/* "Dart Pub cache"
+    clean_dart_analysis_cache || return $?
     safe_clean ~/.cache/bazel/* "Bazel cache"
     safe_clean ~/.cache/zig/* "Zig cache"
     # DENO_DIR mixes remote imports with origin storage and downloaded runtime
     # payloads. The owner clean command resets the whole root, so Mole keeps it
     # review-only and the generic user-cache sweep excludes it as well.
-    clean_clang_module_cache
+    clean_clang_module_cache || return $?
 }
 # CI/CD and DevOps caches.
 clean_dev_cicd() {
