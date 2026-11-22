@@ -346,8 +346,30 @@ mole_purge_resolve_path_case() {
     fi
 }
 
+# Whether BSD find knows the dataless file flag (macOS 10.15 and later). The
+# answer is memoized per process. Report a timeout separately so a caller can
+# keep a target when support is unknown, and propagate signals.
+mole_find_knows_dataless() {
+    if [[ -z "${_MOLE_FIND_KNOWS_DATALESS:-}" ]]; then
+        local probe_rc=0
+        run_with_timeout "$MOLE_TIMEOUT_QUICK_DETECT_SEC" "${FIND_BSD:-/usr/bin/find}" / \
+            -maxdepth 0 -flags +dataless < /dev/null > /dev/null 2>&1 || probe_rc=$?
+        mole_rc_signal "$probe_rc" && return "$probe_rc"
+        if [[ $probe_rc -eq 0 ]]; then
+            _MOLE_FIND_KNOWS_DATALESS=yes
+        elif mole_rc_timeout "$probe_rc"; then
+            _MOLE_FIND_KNOWS_DATALESS=timeout
+        else
+            _MOLE_FIND_KNOWS_DATALESS=no
+        fi
+    fi
+    [[ "$_MOLE_FIND_KNOWS_DATALESS" != timeout ]] || return 124
+    [[ "$_MOLE_FIND_KNOWS_DATALESS" == yes ]]
+}
+
 mole_purge_read_paths_config() {
     local config_file="${1:-$HOME/.config/mole/purge_paths}"
+    local path_mode="${2:-resolved}"
     [[ -f "$config_file" ]] || return 0
 
     local line
@@ -356,7 +378,10 @@ mole_purge_read_paths_config() {
         line="${line%"${line##*[![:space:]]}"}"
         [[ -z "$line" || "$line" =~ ^# ]] && continue
         line="${line/#\~/$HOME}"
-        line=$(mole_purge_resolve_path_case "$line")
+        # The read-only hint checks the dataless flag before entering a root.
+        if [[ "$path_mode" != literal ]]; then
+            line=$(mole_purge_resolve_path_case "$line")
+        fi
         printf '%s\n' "$line"
     done < "$config_file"
 }

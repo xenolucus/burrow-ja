@@ -636,6 +636,15 @@ scan_installed_apps() {
                         plist_path="$playcover_bundle/Info.plist"
                     fi
                 fi
+                # A flat bundle keeps its plist at the bundle root. Reading only
+                # Contents/ failed the scan closed and skipped the whole App
+                # leftovers section on Macs with NetBird UI installed.
+                if [[ ! -f "$plist_path" ]]; then
+                    local flat_plist=""
+                    if flat_plist=$(mole_flat_bundle_info_plist "$app_path"); then
+                        plist_path="$flat_plist"
+                    fi
+                fi
                 local bundle_id=""
                 if [[ ! -f "$plist_path" || ! -r "$plist_path" ]] ||
                     ! bundle_id=$(/usr/libexec/PlistBuddy -c "Print :CFBundleIdentifier" "$plist_path" 2> /dev/null) ||
@@ -780,7 +789,7 @@ scan_installed_apps() {
         if [[ -s "$scan_tmp_dir/scan_failures.list" ]]; then
             local raw_failure_detail=""
             raw_failure_detail=$(head -1 "$scan_tmp_dir/scan_failures.list")
-            MOLE_APP_SCAN_FAILURE_DETAIL=$(mole_terminal_safe_text "${raw_failure_detail/#$HOME/~}")
+            MOLE_APP_SCAN_FAILURE_DETAIL=$(mole_terminal_safe_text "$(mole_tilde_path "$raw_failure_detail")")
             local failed_bundle_path=""
             while IFS= read -r failed_bundle_path; do
                 [[ -n "$failed_bundle_path" ]] || continue
@@ -1430,6 +1439,7 @@ clean_orphaned_system_services() {
     start_section_spinner "Scanning orphaned system services..."
 
     local orphaned_count=0
+    local orphan_spotlight_answers=""
     local -a orphaned_files=()
     local -a orphaned_identities=()
     local -a orphaned_parents=()
@@ -1633,6 +1643,27 @@ clean_orphaned_system_services() {
         return 1
     }
 
+    # 0 when no installed app claims a live helper and Spotlight could have
+    # found one outside the scanned roots; 1 when an app claims it or that
+    # cannot be ruled out. A Spotlight that cannot find Finder answers no
+    # bundle-id query, so its miss proves nothing (asked once per run).
+    # Statuses of 128 and above are signals and are passed on.
+    _live_helper_app_ruled_out() {
+        local helper_bundle_id="$1"
+        local resolver_rc=0
+        bundle_has_installed_app "$helper_bundle_id" \
+            "$service_cleanup_deadline" || resolver_rc=$?
+        [[ $resolver_rc -ge 128 ]] && return "$resolver_rc"
+        [[ $resolver_rc -eq 1 ]] || return 1
+        if [[ -z "${orphan_spotlight_answers:-}" ]]; then
+            local spotlight_rc=0
+            mole_spotlight_answers_bundle_queries "$service_cleanup_deadline" || spotlight_rc=$?
+            [[ $spotlight_rc -ge 128 ]] && return "$spotlight_rc"
+            orphan_spotlight_answers=$([[ $spotlight_rc -eq 0 ]] && echo yes || echo no)
+        fi
+        [[ "${orphan_spotlight_answers:-}" == "yes" ]]
+    }
+
     # Generic plist orphan check: returns 0 if the plist is orphaned.
     # A plist is orphaned when:
     #   1. Its Program binary path is known and missing from disk, AND
@@ -1747,12 +1778,11 @@ clean_orphaned_system_services() {
                 # as "parent app gone" and a live KeepAlive daemon was offered.
                 [[ "$helper_bundle_id" =~ ^(com|org|net|io)\. ]] || return 1
                 local helper_resolver_rc=0
-                bundle_has_installed_app "$helper_bundle_id" \
-                    "$service_cleanup_deadline" || helper_resolver_rc=$?
-                if [[ $helper_resolver_rc -eq 0 ]]; then
-                    return 1 # Parent app still installed, plist is healthy
-                elif [[ $helper_resolver_rc -ge 128 ]]; then
+                _live_helper_app_ruled_out "$helper_bundle_id" || helper_resolver_rc=$?
+                if [[ $helper_resolver_rc -ge 128 ]]; then
                     return "$helper_resolver_rc"
+                elif [[ $helper_resolver_rc -ne 0 ]]; then
+                    return 1 # Parent app installed or not ruled out, plist is healthy
                 fi
                 # Parent app is gone; only a vendor's signed helper is orphaned.
                 local helper_signed_rc=0
@@ -1954,12 +1984,11 @@ clean_orphaned_system_services() {
                 break
             done
             local helper_resolver_rc=0
-            bundle_has_installed_app "$bundle_id" \
-                "$service_cleanup_deadline" || helper_resolver_rc=$?
-            if [[ $helper_resolver_rc -eq 0 ]]; then
-                return 1
-            elif [[ $helper_resolver_rc -ge 128 ]]; then
+            _live_helper_app_ruled_out "$bundle_id" || helper_resolver_rc=$?
+            if [[ $helper_resolver_rc -ge 128 ]]; then
                 return "$helper_resolver_rc"
+            elif [[ $helper_resolver_rc -ne 0 ]]; then
+                return 1
             fi
             [[ $SECONDS -lt $service_cleanup_deadline ]] || return 124
 
@@ -2152,12 +2181,11 @@ clean_orphaned_system_services() {
                 # is installed. See #733.
                 if [[ "$bundle_id" =~ ^(com|org|net|io)\. ]]; then
                     local helper_resolver_rc=0
-                    bundle_has_installed_app "$bundle_id" \
-                        "$service_cleanup_deadline" || helper_resolver_rc=$?
+                    _live_helper_app_ruled_out "$bundle_id" || helper_resolver_rc=$?
                     if [[ $helper_resolver_rc -ge 128 ]]; then
                         service_scan_status=$helper_resolver_rc
                         break
-                    elif [[ $helper_resolver_rc -eq 1 ]]; then
+                    elif [[ $helper_resolver_rc -eq 0 ]]; then
                         # Judge the binary itself; a helper-root .plist follows
                         # its same-named binary when that binary is present.
                         local helper_binary="$helper"
@@ -2397,6 +2425,7 @@ clean_orphaned_system_services() {
             local orphaned_kb_display
             orphaned_kb_display=$(bytes_to_human "$((removed_kb * 1024))")
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Orphaned services · cleaned ${removed_count}, ${orphaned_kb_display}"
+            mole_add_cleaned_row "$removed_count" "$removed_kb"
             note_activity
         fi
         # Surface protected/failed counts in BOTH dry-run and real-clean so the

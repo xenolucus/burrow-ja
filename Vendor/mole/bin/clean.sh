@@ -549,6 +549,7 @@ read_clean_sudo_password_remainder() {
 
 prompt_for_system_clean() {
     local prompt_attempt=0
+    mole_report_program_status blocked permission
     while true; do
         echo -ne "${PURPLE}${ICON_ARROW}${NC} System caches need sudo. ${GREEN}Enter${NC} continue, ${GRAY}Space${NC} skip: "
 
@@ -559,6 +560,7 @@ prompt_for_system_clean() {
         # starts typing their password) proceeds to authentication.
         if [[ "$choice" == "QUIT" ]]; then
             echo -e " ${GRAY}Canceled${NC}"
+            CLEAN_STATUS_ON_SUCCESS=idle
             exit 0
         fi
 
@@ -569,6 +571,7 @@ prompt_for_system_clean() {
             break
         elif [[ "$choice" == "ENTER" ]]; then
             printf "\r\033[K" # Clear the prompt line
+            mole_report_program_status blocked auth
             if ensure_sudo_session "System cleanup requires admin access"; then
                 SYSTEM_CLEAN=true
                 echo -e "${GREEN}${ICON_SUCCESS}${NC} Admin access granted"
@@ -582,6 +585,7 @@ prompt_for_system_clean() {
         elif [[ "$choice" == CHAR:* ]]; then
             local typed_password="${choice#CHAR:}"
             local password_remainder=""
+            mole_report_program_status blocked auth
             read_clean_sudo_password_remainder password_remainder
             typed_password="${typed_password}${password_remainder}"
 
@@ -610,9 +614,12 @@ prompt_for_system_clean() {
             echo -e "${YELLOW}${ICON_WARNING}${NC} Press Enter to continue, or Space to skip"
         fi
     done
+    mole_report_program_status working
 }
 
 CLEANUP_DONE=false
+# Set once a cleanup or preview starts. Escape cancels with a zero exit code.
+CLEAN_STATUS_ON_SUCCESS=""
 # shellcheck disable=SC2329
 cleanup() {
     local signal="${1:-EXIT}"
@@ -633,6 +640,13 @@ cleanup() {
     stop_sudo_session
 
     show_cursor
+
+    [[ -n "$CLEAN_STATUS_ON_SUCCESS" ]] || return 0
+    case "$exit_code" in
+        0) mole_report_program_status "$CLEAN_STATUS_ON_SUCCESS" ;;
+        130 | 143) mole_report_program_status idle ;; # SIGINT or SIGTERM, including from a cleanup step.
+        *) mole_report_program_status error ;;
+    esac
 }
 
 trap 'cleanup EXIT $?' EXIT
@@ -837,6 +851,40 @@ classify_cleanup_risk() {
 
     # DEFAULT: MEDIUM
     echo "MEDIUM|User data files"
+}
+
+# Spinner label for one safe_clean item, written to _MOLE_SAFE_CLEAN_LABEL
+# rather than printed, so a short name forks nothing. The name comes from disk
+# and the spinner strips only CR and LF, so a name holding other control bytes
+# goes through mole_terminal_safe_text first. No trailing "...": the spinner
+# already shows work in progress, and an ellipsis after a name reads as a cut
+# name. A name too long for the line loses its middle, never the section and
+# position, which the spinner's own end cut would keep instead of the name's
+# distinguishing tail. _MOLE_SAFE_CLEAN_COLS is read once per safe_clean call.
+_safe_clean_spinner_label() {
+    local description="$1"
+    local index="$2"
+    local total="$3"
+    local path="$4"
+    local item_name="${path%/}"
+    item_name="${item_name##*/}"
+    printf -v _MOLE_SAFE_CLEAN_LABEL 'Cleaning %s %d/%d' "$description" "$index" "$total"
+    [[ -n "$item_name" ]] || return 0
+    if [[ "$item_name" == *[[:cntrl:]]* ]]; then
+        item_name=$(mole_terminal_safe_text "$item_name")
+    fi
+    # format_spinner_message keeps cols - 8; one more column of slack, since
+    # get_display_width counts the one-column "…" as two.
+    local cols="${_MOLE_SAFE_CLEAN_COLS:-80}"
+    [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
+    local room=$((cols - 9 - ${#_MOLE_SAFE_CLEAN_LABEL} - 3))
+    if ((room < 8)); then
+        return 0
+    fi
+    if [[ "$item_name" == *[![:ascii:]]* || ${#item_name} -gt $room ]]; then
+        item_name=$(truncate_middle_by_display_width "$item_name" "$room")
+    fi
+    _MOLE_SAFE_CLEAN_LABEL+=" · $item_name"
 }
 
 # Internal implementation shared by the normal and process-guarded cleanup
@@ -1186,10 +1234,11 @@ _safe_clean_impl() {
         debug_timer_start _perf_del_start
 
         # Read results back in original order.
-        # Start spinner for cleaning phase
+        local cleaning_progress_last=-1
+        local show_cleaning_spinner=false
         if [[ "$DRY_RUN" != "true" && ${#existing_paths[@]} -gt 0 && -t 1 ]]; then
-            start_section_spinner "Cleaning..."
-            cleaning_spinner_started=true
+            show_cleaning_spinner=true
+            _MOLE_SAFE_CLEAN_COLS="${COLUMNS:-$(tput cols 2> /dev/null || echo 80)}"
         elif [[ -n "$delete_guard" && -t 1 ]]; then
             # The preview still asks the owner guard about every item, about
             # 70ms each, which left VS Code logs silent for 0.7s.
@@ -1208,6 +1257,20 @@ _safe_clean_impl() {
                     local removed=0
                     local action_rc=0
                     if [[ "$DRY_RUN" != "true" ]]; then
+                        # One 21GB cache took 15s of a 50s "Cleaning..." with
+                        # nothing else on screen. Name each item of 1MB or more
+                        # (or whose size could not be measured, e.g. sizing timed
+                        # out), and tick smaller ones at most once a second,
+                        # since each update costs about 10ms.
+                        if [[ "$show_cleaning_spinner" == "true" ]] &&
+                            { [[ "$size" =~ ^[0-9]+$ && "$size" -ge 1024 ]] ||
+                                [[ "${size_unknown:-0}" != "0" ]] ||
+                                ((SECONDS - cleaning_progress_last >= 1)); }; then
+                            _safe_clean_spinner_label "$description" "$((idx + 1))" "${#existing_paths[@]}" "$path"
+                            start_section_spinner "$_MOLE_SAFE_CLEAN_LABEL"
+                            cleaning_spinner_started=true
+                            cleaning_progress_last=$SECONDS
+                        fi
                         if [[ -n "$delete_guard" ]]; then
                             _MOLE_SAFE_CLEAN_BOUND_PATH=""
                             _MOLE_SAFE_CLEAN_SKIP_PATH=""
@@ -1301,16 +1364,23 @@ _safe_clean_impl() {
         local _perf_del_start
         debug_timer_start _perf_del_start
 
-        # Start spinner for cleaning phase (small batch)
+        # Show the active item for small batches too: a single multi-GB cache
+        # directory takes this branch and would otherwise sit on "Cleaning...".
+        local show_cleaning_spinner=false
         if [[ "$DRY_RUN" != "true" && ${#existing_paths[@]} -gt 0 && -t 1 ]]; then
-            start_section_spinner "Cleaning..."
-            cleaning_spinner_started=true
+            show_cleaning_spinner=true
+            _MOLE_SAFE_CLEAN_COLS="${COLUMNS:-$(tput cols 2> /dev/null || echo 80)}"
         fi
         local idx=0
         if [[ ${#existing_paths[@]} -gt 0 ]]; then
             for path in "${existing_paths[@]}"; do
                 if _mole_clean_section_budget_spent; then
                     break
+                fi
+                if [[ "$show_cleaning_spinner" == "true" ]]; then
+                    _safe_clean_spinner_label "$description" "$((idx + 1))" "${#existing_paths[@]}" "$path"
+                    start_section_spinner "$_MOLE_SAFE_CLEAN_LABEL"
+                    cleaning_spinner_started=true
                 fi
                 local size_kb=0
                 local size_rc=0
@@ -1551,7 +1621,7 @@ refuse_cleanup_without_write_access() {
     done
     [[ -n "$refused_target" ]] || return 0
 
-    printf 'mo clean cannot remove files from this shell: writing to %s was refused (%s).\n' "${refused_target/#$HOME/~}" "$refused_reason" >&2
+    printf 'mo clean cannot remove files from this shell: writing to %s was refused (%s).\n' "$(mole_tilde_path "$refused_target")" "$refused_reason" >&2
     printf 'Nothing was removed.' >&2
     [[ "$refused_reason" == "Read-only file system" ]] || printf ' If this shell runs in a sandbox, run mo clean in your own terminal.' >&2
     printf '\n' >&2
@@ -2104,14 +2174,6 @@ perform_cleanup() {
         done < <(emit_free_space_summary "$initial_free_space_kb" "$free_space_target")
     fi
 
-    # Caches of running apps are deferred silently: skipping them is Mole's
-    # ordinary behavior, not news, and for always-on tools (Codex, browsers)
-    # a summary line here appeared on every single run. Preview still lists
-    # what would be cleaned, and the ledger stays visible under --debug.
-    if [[ ${#DEFERRED_CLEANUP_FAMILIES[@]} -gt 0 ]]; then
-        debug_log "Deferred while active: $(format_deferred_cleanup_families)"
-    fi
-
     if [[ "$DRY_RUN" == "true" &&
         ($total_size_cleaned -gt 0 || "$DRY_RUN_TOTAL_PARTIAL" == "true" || $files_cleaned -gt 0) ]]; then
         if publish_clean_preview_file; then
@@ -2121,6 +2183,16 @@ perform_cleanup() {
         fi
     elif [[ "$DRY_RUN" == "true" ]]; then
         publish_clean_preview_file || true
+    fi
+
+    if [[ ${#DEFERRED_CLEANUP_FAMILIES[@]} -gt 0 ]]; then
+        local deferred_families
+        deferred_families=$(format_deferred_cleanup_families)
+        debug_log "Deferred while active: $deferred_families"
+        # A family skipped during preview can become eligible before cleanup (#2039).
+        if [[ "$DRY_RUN" == "true" ]]; then
+            summary_details+=("Skipped in this preview · $deferred_families")
+        fi
     fi
 
     if [[ ${MOLE_CLEAN_SIZING_TIMEOUTS:-0} -gt 0 ]]; then
@@ -2254,6 +2326,8 @@ main() {
         shift
     done
 
+    CLEAN_STATUS_ON_SUCCESS="done"
+    mole_report_program_status working
     refuse_cleanup_without_write_access || exit 1
     start_cleanup
     hide_cursor

@@ -356,6 +356,7 @@ clean_github_cli_cache() {
     if [[ $clear_status -eq 0 ]]; then
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} GitHub CLI cache"
         note_activity
+        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_path" "owner command: GitHub CLI cache"
         return 0
     fi
     if mole_rc_timeout_or_signal "$clear_status"; then
@@ -1183,6 +1184,10 @@ clean_go_cache_root() {
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $display_name"
         fi
         note_activity
+        # A dry run ran `go clean -n`, which changes nothing.
+        if [[ "$DRY_RUN" != "true" ]]; then
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: $display_name"
+        fi
         if mole_rc_signal "$after_rc"; then
             _mole_record_clean_cancellation "$after_rc" "$display_name"
             return "$after_rc"
@@ -1305,8 +1310,7 @@ resolve_tool_home() {
 
     if [[ -n "$env_value" && "$env_value" == /* ]]; then
         case "$env_value" in
-            *'/../'* | */.. | .. | *$'\n'* | *$'\r'*)
-                ;;
+            *'/../'* | */.. | .. | *$'\n'* | *$'\r'*) ;;
             *)
                 printf '%s\n' "${env_value%/}"
                 return 0
@@ -1737,6 +1741,15 @@ check_android_ndk() {
     check_multiple_versions "$ndk_dir" "Android NDK versions" "$newest"
 }
 
+_xcode_ensure_sudo_session() {
+    has_sudo_session && return 0
+    local auth_rc=0
+    mole_report_program_status blocked auth
+    ensure_sudo_session "$1" || auth_rc=$?
+    mole_report_program_status working
+    return "$auth_rc"
+}
+
 clean_xcode_documentation_cache() {
     # Honor the command-wide choice before scanning or requesting credentials.
     [[ "${SYSTEM_CLEAN:-true}" == "true" ]] || return 0
@@ -1838,12 +1851,10 @@ clean_xcode_documentation_cache() {
         return 0
     fi
 
-    if ! has_sudo_session; then
-        if ! ensure_sudo_session "Cleaning Xcode documentation cache requires admin access"; then
-            echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode documentation cache · skipped (sudo denied)"
-            note_activity
-            return 0
-        fi
+    if ! _xcode_ensure_sudo_session "Cleaning Xcode documentation cache requires admin access"; then
+        echo -e "  ${GRAY}${ICON_WARNING}${NC} Xcode documentation cache · skipped (sudo denied)"
+        note_activity
+        return 0
     fi
 
     local removed_count=0
@@ -2284,12 +2295,10 @@ clean_xcode_system_coresimulator_caches() {
         return 0
     fi
 
-    if ! has_sudo_session; then
-        if ! ensure_sudo_session "Cleaning Xcode Simulator system cache requires admin access"; then
-            echo -e "  ${YELLOW}${ICON_WARNING}${NC} Xcode Simulator system cache · skipped (sudo denied)"
-            note_activity
-            return 0
-        fi
+    if ! _xcode_ensure_sudo_session "Cleaning Xcode Simulator system cache requires admin access"; then
+        echo -e "  ${YELLOW}${ICON_WARNING}${NC} Xcode Simulator system cache · skipped (sudo denied)"
+        note_activity
+        return 0
     fi
 
     local removed_count=0
@@ -3159,6 +3168,8 @@ clean_dev_mobile() {
                         delete_output=$(_run_simctl "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" delete unavailable 2>&1) || delete_exit_code=$?
 
                         if [[ $delete_exit_code -eq 0 ]]; then
+                            # Record the successful deletion before the recount can be interrupted.
+                            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "simctl delete unavailable" "owner command"
                             local recount_exit_code=0
                             unavailable_devices_output=$(_run_simctl "$MOLE_TIMEOUT_PKG_LIST_SEC" list devices unavailable 2> /dev/null) || recount_exit_code=$?
                             stop_section_spinner
@@ -3178,6 +3189,7 @@ clean_dev_mobile() {
                                 line_color=$(cleanup_result_color_kb "$unavailable_size_kb")
                                 if ((removed_unavailable > 0)); then
                                     echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · removed ${removed_unavailable}, $(colorize_human_size "${unavailable_size_human}")"
+                                    mole_add_cleaned_row "$removed_unavailable" "$unavailable_size_kb"
                                 else
                                     echo -e "  ${line_color}${ICON_SUCCESS}${NC} Xcode unavailable simulators · cleanup completed, $(colorize_human_size "${unavailable_size_human}")"
                                 fi
@@ -4485,9 +4497,107 @@ clean_dev_database() {
     safe_clean ~/Library/Caches/com.dbeaver.* "DBeaver cache"
     safe_clean ~/Library/Caches/com.redis.RedisInsight "Redis Insight cache"
 }
+postman_desktop_process_state() {
+    mole_pgrep_any \
+        -x Postman \
+        -f '/Postman[.]app/' \
+        -f '(^|/)Postman Helper([[:space:](]|$)'
+}
+
+# Retain the identities from discovery across owner probes and the final sink.
+postman_partition_cache_state() {
+    local process_state=0
+    postman_desktop_process_state || process_state=$?
+    [[ $process_state -eq 1 ]] || return "$process_state"
+
+    local guarded_path="${_MOLE_DEV_GUARDED_PATH:-}"
+    [[ -n "$guarded_path" ]] || return 1
+    local entry_index cache_index index
+    for entry_index in "${!_MOLE_POSTMAN_ENTRIES[@]}"; do
+        [[ "$guarded_path" == "${_MOLE_POSTMAN_ENTRIES[$entry_index]}" ]] || continue
+        cache_index="${_MOLE_POSTMAN_ENTRY_ROOTS[$entry_index]}"
+        codex_staging_physical_path "${_MOLE_POSTMAN_PATHS[$cache_index]}" "$_MOLE_POSTMAN_ROOT" any > /dev/null || return 2
+        for index in 0 "${_MOLE_POSTMAN_CONTAINERS[$cache_index]}" "$cache_index"; do
+            guarded_dev_cache_root_physical_path \
+                "${_MOLE_POSTMAN_PARENTS[$index]}" "${_MOLE_POSTMAN_PATHS[$index]}" > /dev/null || return 2
+            _mole_path_matches_identity "${_MOLE_POSTMAN_PATHS[$index]}" \
+                "${_MOLE_POSTMAN_PARENTS[$index]}" "${_MOLE_POSTMAN_PARENT_IDS[$index]}" \
+                "${_MOLE_POSTMAN_IDS[$index]}" || return 2
+        done
+        _mole_path_matches_identity "$guarded_path" "${_MOLE_POSTMAN_ENTRY_PARENTS[$entry_index]}" \
+            "${_MOLE_POSTMAN_IDS[$cache_index]}" "${_MOLE_POSTMAN_ENTRY_IDS[$entry_index]}" || return 2
+        _MOLE_SAFE_CLEAN_BOUND_PATH="$guarded_path"
+        _MOLE_SAFE_CLEAN_EXPECTED_PARENT="${_MOLE_POSTMAN_ENTRY_PARENTS[$entry_index]}"
+        _MOLE_SAFE_CLEAN_EXPECTED_PARENT_ID="${_MOLE_POSTMAN_IDS[$cache_index]}"
+        _MOLE_SAFE_CLEAN_EXPECTED_TARGET_ID="${_MOLE_POSTMAN_ENTRY_IDS[$entry_index]}"
+        return 1
+    done
+    return 2
+}
+
+# Each Postman partition is a Chromium session. Keep cookies, IndexedDB,
+# Local Storage, Service Worker data and every sibling outside these two caches.
+clean_postman_partition_caches() {
+    local _MOLE_POSTMAN_ROOT="$HOME/Library/Application Support/Postman"
+    local partitions="$_MOLE_POSTMAN_ROOT/Partitions"
+    codex_staging_physical_path "$partitions" "$_MOLE_POSTMAN_ROOT" any > /dev/null || return 0
+    guarded_dev_cache_root_physical_path "$_MOLE_POSTMAN_ROOT" "$partitions" > /dev/null || return 0
+    _mole_snapshot_path_identity "$partitions" || return 0
+    local -a _MOLE_POSTMAN_PATHS=("$partitions")
+    local -a _MOLE_POSTMAN_PARENTS=("$_MOLE_PATH_SNAPSHOT_PARENT")
+    local -a _MOLE_POSTMAN_PARENT_IDS=("$_MOLE_PATH_SNAPSHOT_PARENT_ID")
+    local -a _MOLE_POSTMAN_IDS=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
+    local -a _MOLE_POSTMAN_CONTAINERS=()
+    local -a _MOLE_POSTMAN_ENTRIES=()
+    local -a _MOLE_POSTMAN_ENTRY_IDS=()
+    local -a _MOLE_POSTMAN_ENTRY_PARENTS=()
+    local -a _MOLE_POSTMAN_ENTRY_ROOTS=()
+
+    local partition cache_root candidate partition_index cache_index
+    for partition in "$partitions"/* "$partitions"/.[!.]* "$partitions"/..?*; do
+        [[ -d "$partition" && ! -L "$partition" ]] || continue
+        _mole_snapshot_path_identity "$partition" || continue
+        partition_index=${#_MOLE_POSTMAN_PATHS[@]}
+        _MOLE_POSTMAN_PATHS+=("$partition")
+        _MOLE_POSTMAN_PARENTS+=("$_MOLE_PATH_SNAPSHOT_PARENT")
+        _MOLE_POSTMAN_PARENT_IDS+=("$_MOLE_PATH_SNAPSHOT_PARENT_ID")
+        _MOLE_POSTMAN_IDS+=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
+
+        for cache_root in "$partition/Cache" "$partition/Code Cache"; do
+            codex_staging_physical_path "$cache_root" "$_MOLE_POSTMAN_ROOT" any > /dev/null || continue
+            _mole_snapshot_path_identity "$cache_root" || continue
+            cache_index=${#_MOLE_POSTMAN_PATHS[@]}
+            _MOLE_POSTMAN_PATHS+=("$cache_root")
+            _MOLE_POSTMAN_PARENTS+=("$_MOLE_PATH_SNAPSHOT_PARENT")
+            _MOLE_POSTMAN_PARENT_IDS+=("$_MOLE_PATH_SNAPSHOT_PARENT_ID")
+            _MOLE_POSTMAN_IDS+=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
+            _MOLE_POSTMAN_CONTAINERS[cache_index]=$partition_index
+            for candidate in "$cache_root"/* "$cache_root"/.[!.]* "$cache_root"/..?*; do
+                [[ -e "$candidate" || -L "$candidate" ]] || continue
+                [[ ! -L "$candidate" ]] || continue
+                # Bind before sizing so a replacement entry cannot inherit approval.
+                _mole_snapshot_path_identity "$candidate" || continue
+                [[ "$_MOLE_PATH_SNAPSHOT_PARENT_ID" == "${_MOLE_POSTMAN_IDS[$cache_index]}" ]] || continue
+                _MOLE_POSTMAN_ENTRIES+=("$candidate")
+                _MOLE_POSTMAN_ENTRY_IDS+=("$_MOLE_PATH_SNAPSHOT_TARGET_ID")
+                _MOLE_POSTMAN_ENTRY_PARENTS+=("$_MOLE_PATH_SNAPSHOT_PARENT")
+                _MOLE_POSTMAN_ENTRY_ROOTS+=("$cache_index")
+            done
+        done
+    done
+    [[ ${#_MOLE_POSTMAN_ENTRIES[@]} -gt 0 ]] || return 0
+    local _MOLE_DEV_PROCESS_GUARD_UNKNOWN_REASON="process or cache path state unknown"
+    local clean_rc=0
+    _dev_safe_clean_process_guarded postman_partition_cache_state "Postman" "Postman partition caches" \
+        "${_MOLE_POSTMAN_ENTRIES[@]}" "Postman partition caches" || clean_rc=$?
+    [[ $clean_rc -eq 1 ]] && return 0
+    return "$clean_rc"
+}
+
 # API/debugging tool caches.
 clean_dev_api_tools() {
     safe_clean ~/Library/Caches/com.postmanlabs.mac/* "Postman cache"
+    clean_postman_partition_caches || return $?
     safe_clean ~/Library/Caches/com.konghq.insomnia/* "Insomnia cache"
     safe_clean ~/Library/Caches/com.tinyapp.TablePlus/* "TablePlus cache"
     safe_clean ~/Library/Caches/com.getpaw.Paw/* "Paw API cache"

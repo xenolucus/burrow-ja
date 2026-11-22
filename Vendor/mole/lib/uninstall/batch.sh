@@ -256,10 +256,8 @@ append_line() {
 
 format_uninstall_preview_path() {
     local path="$1"
-    # Replacement must come from a variable: bash 5.3+ tilde-expands a literal
-    # unquoted ~ in the patsub replacement, turning this into a no-op.
-    local tilde='~'
-    local display_path="${path/#$HOME/$tilde}"
+    local display_path
+    display_path=$(mole_tilde_path "$path")
     local size_kb="0"
     local size_rc=0
     if [[ $# -gt 1 ]]; then
@@ -271,7 +269,7 @@ format_uninstall_preview_path() {
     fi
 
     if [[ "$size_kb" =~ ^[0-9]+$ && "$size_kb" -gt 0 ]]; then
-        printf '%s %s, %s%s' "$display_path" "$GRAY" "$(bytes_to_human "$((size_kb * 1024))")" "$NC"
+        printf '%s %s· %s%s' "$display_path" "$GRAY" "$(bytes_to_human "$((size_kb * 1024))")" "$NC"
     else
         printf '%s' "$display_path"
     fi
@@ -2441,7 +2439,7 @@ _batch_preview_and_confirm() {
             fi
             local display_app_name
             display_app_name=$(_uninstall_display_text "$app_name")
-            echo -e "${BLUE}${ICON_CONFIRM}${NC} ${display_app_name}${brew_tag} ${GRAY}, ${app_size_display}${NC}"
+            echo -e "${BLUE}${ICON_CONFIRM}${NC} ${display_app_name}${brew_tag} ${GRAY}· ${app_size_display}${NC}"
 
             # Show detailed file list for ALL apps (brew casks leave user data behind)
             local system_files=$(decode_file_list "$encoded_system_files" "$app_name")
@@ -2484,15 +2482,31 @@ _batch_preview_and_confirm() {
                     kept_data=$(append_line "$kept_data" "$personal_path")
                 fi
             done
+            # The D key changes this choice, so its hint sits on the first
+            # personal-data heading rather than on a line of its own. Without
+            # a terminal there is no prompt to press it at.
+            local personal_hint=""
+            if [[ -t 0 || "${MOLE_TEST_MODE:-0}" == "1" ]]; then
+                personal_hint="${GRAY}, press ${NC}D${GRAY} to choose:${NC}"
+            fi
             if [[ -n "$removed_data" ]]; then
-                echo -e "\n${PURPLE_BOLD}Personal data to remove:${NC}"
+                if [[ -n "$personal_hint" ]]; then
+                    echo -e "\n${PURPLE_BOLD}Personal data to remove${NC}${personal_hint}"
+                    personal_hint=""
+                else
+                    echo -e "\n${PURPLE_BOLD}Personal data to remove:${NC}"
+                fi
                 _uninstall_print_preview_paths "$removed_data" "  ${GREEN}${ICON_SUCCESS}${NC} " || return $?
             fi
             if [[ -n "$kept_data" ]]; then
-                echo -e "\n${GRAY}Personal data kept:${NC}"
+                if [[ -n "$personal_hint" ]]; then
+                    echo -e "\n${GRAY}Personal data kept${NC}${personal_hint}"
+                else
+                    echo -e "\n${GRAY}Personal data kept:${NC}"
+                fi
                 while IFS= read -r personal_path; do
-                    local kept_display="$personal_path" tilde='~'
-                    kept_display="${kept_display/#$HOME/$tilde}"
+                    local kept_display
+                    kept_display=$(mole_tilde_path "$personal_path")
                     printf '  %b%s%b\n' "${GRAY}${ICON_REVIEW} " "$(mole_terminal_safe_text "$kept_display")" "$NC"
                 done <<< "$kept_data"
             fi
@@ -2510,7 +2524,6 @@ _batch_preview_and_confirm() {
         if [[ ${#running_apps[@]} -gt 0 ]]; then
             removal_note+=" ${YELLOW}[Running]${NC}"
         fi
-        [[ ${#_review_personal_paths[@]} -eq 0 ]] || echo -e "${GRAY}D${NC} choose personal data"
 
         # A read from a non-terminal fails and used to become an empty key,
         # which the case below treats as Enter: a script or agent could confirm
@@ -2557,6 +2570,10 @@ _batch_preview_and_confirm() {
             d | D)
                 [[ ${#_review_personal_paths[@]} -gt 0 ]] || return 2
                 _uninstall_choose_personal_data || return $?
+                # The picker restores the screen it left, preview and prompt
+                # included; start the redrawn plan on a clear screen so the
+                # stale one is not left above it.
+                [[ ! -t 1 ]] || clear_screen
                 continue
                 ;;
             "" | $'\n' | $'\r' | y | Y)
@@ -2609,9 +2626,6 @@ _batch_preview_and_confirm() {
 #         total_size_freed, brew_apps_removed,
 #         files_cleaned, total_items (the latter two via dynamic scope)
 _batch_execute_removals() {
-    # See format_uninstall_preview_path: literal ~ in a patsub replacement is
-    # tilde-expanded by bash 5.3+, so route it through a variable.
-    local tilde_display='~'
     local current_index=0
     for detail in "${app_details[@]}"; do
         current_index=$((current_index + 1))
@@ -3137,10 +3151,10 @@ _batch_execute_removals() {
                             fi
                             ;;
                     esac
-                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} $kept_label: ${_lpath/#$HOME/$tilde_display}"
+                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} $kept_label: $(mole_tilde_path "$_lpath")"
                 done
                 if [[ $family_kept_count -eq 1 ]]; then
-                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} $family_kept_label: ${family_kept_first/#$HOME/$tilde_display}"
+                    echo -e "  ${YELLOW}${ICON_WARNING}${NC} $family_kept_label: $(mole_tilde_path "$family_kept_first")"
                 elif [[ $family_kept_count -gt 1 ]]; then
                     echo -e "  ${YELLOW}${ICON_WARNING}${NC} $family_kept_label: $family_kept_count paths"
                 fi
@@ -3192,7 +3206,7 @@ _batch_execute_removals() {
             [[ -t 1 ]] && stop_inline_spinner
             if [[ -t 1 ]]; then
                 if [[ ${#app_details[@]} -gt 1 ]]; then
-                    echo -e "${ICON_ERROR} [$current_index/${#app_details[@]}] ${app_name} ${GRAY}, $reason${NC}"
+                    echo -e "${ICON_ERROR} [$current_index/${#app_details[@]}] ${app_name}${GRAY}, $reason${NC}"
                 else
                     echo -e "${ICON_ERROR} ${app_name} failed: $reason"
                 fi
