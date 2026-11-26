@@ -683,7 +683,7 @@ struct MenuGroupView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             if apps.isEmpty {
-                Text("「設定」でこのまとめにアプリを追加します。").font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                Text("「設定」でこのまとめにアプリを追加します。").font(ThemeType.caption).foregroundStyle(Theme.secondaryText)
             }
             LazyVGrid(columns: Array(repeating: GridItem(.fixed(64)), count: 4), spacing: 8) {
                 ForEach(apps) { app in
@@ -710,7 +710,7 @@ struct MenuGroupView: View {
                     Spacer()
                     Button("アイコンを更新") { hider.refreshIcons() }.disabled(hider.revealed)
                 }
-                .font(.system(size: 12)).buttonStyle(.link)
+                .font(ThemeType.caption).buttonStyle(.link)
             }
         }
         .padding(12)
@@ -736,7 +736,7 @@ struct MenuHideCard: View {
             HStack(spacing: 8) {
                 ForEach(hider.groups) { item in
                     Button { selectedID = item.id } label: {
-                        Label(item.name, systemImage: item.symbol).font(.system(size: 12)).lineLimit(1)
+                        Label(item.name, systemImage: item.symbol).font(ThemeType.caption).lineLimit(1)
                             .padding(.horizontal, 10).padding(.vertical, 5)
                             .background(Capsule().fill(.white.opacity(item.id == group.id ? 0.2 : 0.06)))
                     }
@@ -746,7 +746,7 @@ struct MenuHideCard: View {
                     .buttonStyle(.plain).accessibilityLabel("まとめを追加")
                 Spacer()
                 if hider.groups.count > 1 {
-                    Button("このまとめを削除") { hider.removeGroup(group.id) }.buttonStyle(.link).font(.system(size: 12))
+                    Button("このまとめを削除") { hider.removeGroup(group.id) }.buttonStyle(.link).font(ThemeType.caption)
                 }
             }
             HStack(spacing: 8) {
@@ -754,7 +754,7 @@ struct MenuHideCard: View {
                     .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
                 ForEach(MenuGroup.symbols, id: \.self) { symbol in
                     Button { hider.updateGroup(group.id) { $0.symbol = symbol } } label: {
-                        Image(systemName: symbol).font(.system(size: 13)).frame(width: 26, height: 26)
+                        Image(systemName: symbol).font(ThemeType.body).frame(width: 26, height: 26)
                             .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(symbol == group.symbol ? 0.22 : 0)))
                             .contentShape(Rectangle())
                     }
@@ -767,16 +767,16 @@ struct MenuHideCard: View {
     private func section(_ title: String, _ apps: [MenuHider.App], action: String, empty: String,
                          run: @escaping (String) -> Void) -> some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("\(title)（\(apps.count)）").font(.system(size: 13, weight: .semibold))
+            Text("\(title)（\(apps.count)）").font(ThemeType.bodyBold)
             if apps.isEmpty { Text(empty).caption() }
             LazyVGrid(columns: [GridItem(.adaptive(minimum: 220), spacing: 12, alignment: .leading)], alignment: .leading, spacing: 6) {
                 ForEach(apps) { app in
                     Button { run(app.id) } label: {
                         HStack(spacing: 6) {
                             Image(nsImage: app.icon).resizable().frame(width: 16, height: 16)
-                            Text(verbatim: app.name).font(.system(size: 13)).lineLimit(1)
+                            Text(verbatim: app.name).font(ThemeType.body).lineLimit(1)
                             Spacer(minLength: 4)
-                            Text(action).font(.system(size: 12)).foregroundStyle(Theme.secondaryText)
+                            Text(action).font(ThemeType.caption).foregroundStyle(Theme.secondaryText)
                         }
                         .contentShape(Rectangle())
                     }
@@ -793,7 +793,7 @@ struct MenuHideCard: View {
                 Text("メニューバー項目のまとめ（試験的）").cardTitle()
                 Text("アイコンを押すと、まとめたアプリがメニューバーに出ます。もう一度押すと隠れます。右クリックで一覧を開きます。隠している間は、集中モードとカメラ・マイクの表示も隠れ、時計やバッテリーがクリックできなくなる場合があります。").caption()
                 if let problem = hider.problem {
-                    Text(problem).font(.system(size: 12)).foregroundStyle(Theme.danger)
+                    Text(problem).font(ThemeType.caption).foregroundStyle(Theme.danger)
                 }
                 do {
                     if !hider.canSeeMenuBar {
@@ -804,9 +804,9 @@ struct MenuHideCard: View {
                         }
                     }
                     Toggle("ページとして切り替える（1つずつ表示）", isOn: Binding { pageMode } set: { pageMode = $0; hider.setPageMode($0) })
-                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                        .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                     Toggle("ショートカット（⌃⌥⌘M で次へ、⌃⌥⌘1〜9 で直接）", isOn: Binding { hotKeys } set: { hotKeys = $0; hider.setHotKeys($0) })
-                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                        .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                     if pageMode {
                         Picker("ページ", selection: Binding { hider.expanded.first ?? MenuHider.allPage } set: { hider.showPage($0) }) {
                             ForEach(hider.groups) { Text($0.name).tag($0.id) }
@@ -815,7 +815,7 @@ struct MenuHideCard: View {
                         .pickerStyle(.segmented).labelsHidden()
                     } else {
                         HStack(spacing: 12) {
-                            Text("自動で隠すまで").font(.system(size: 13))
+                            Text("自動で隠すまで").font(ThemeType.body)
                             Picker("自動で隠すまで", selection: $collapse) {
                                 ForEach([5, 15, 30, 0], id: \.self) { Text($0 == 0 ? "隠さない" : "\($0)秒").tag($0) }
                             }

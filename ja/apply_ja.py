@@ -138,6 +138,8 @@ def main():
     shutil.copy2(KIT / "SystemData.swift", sources / "SystemData.swift")
     shutil.copy2(KIT / "Alerts.swift", sources / "Alerts.swift")
     shutil.copy2(KIT / "Tools.swift", sources / "Tools.swift")
+    shutil.copy2(KIT / "WindowSize.swift", sources / "WindowSize.swift")
+    shutil.copy2(KIT / "ThemeType.swift", sources / "ThemeType.swift")
     shutil.copy2(KIT / "MenuTweaks.swift", sources / "MenuTweaks.swift")
     shutil.copy2(KIT / "HeavyApps.swift", sources / "HeavyApps.swift")
     shutil.copy2(KIT / "ManualGuide.swift", sources / "ManualGuide.swift")

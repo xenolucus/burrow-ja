@@ -56,7 +56,7 @@ struct MenuSpacingCard: View {
         return HStack(spacing: gap) {
             Spacer(minLength: 0)
             ForEach(Array(samples.enumerated()), id: \.offset) { index, symbol in
-                Image(systemName: symbol).font(.system(size: 14, weight: .medium))
+                Image(systemName: symbol).font(ThemeType.lead)
                     .frame(width: 22, height: 22)
                     .padding(.horizontal, inset / 2)
                     .background(RoundedRectangle(cornerRadius: 6).fill(.white.opacity(index == 0 ? 0.2 : 0)))
@@ -71,7 +71,7 @@ struct MenuSpacingCard: View {
 
     private func slider(_ title: String, _ value: Binding<Int?>, key: String) -> some View {
         HStack(spacing: 12) {
-            Text(title).font(.system(size: 13)).frame(width: 150, alignment: .leading)
+            Text(title).font(ThemeType.body).frame(minWidth: 150, alignment: .leading).fixedSize(horizontal: true, vertical: false)
             Slider(value: Binding { Double(value.wrappedValue ?? 16) } set: { value.wrappedValue = Int($0) },
                    in: MenuSpacing.range, step: 1) { editing in
                 guard !editing else { return }
@@ -79,8 +79,8 @@ struct MenuSpacingCard: View {
                 changed = true
             }
             .accessibilityLabel(title)
-            Text(MenuSpacing.label(value.wrappedValue)).font(.system(size: 13, weight: .medium)).monospacedDigit()
-                .frame(width: 50, alignment: .trailing)
+            Text(MenuSpacing.label(value.wrappedValue)).font(ThemeType.bodyStrong).monospacedDigit()
+                .frame(minWidth: 50, alignment: .trailing).fixedSize(horizontal: true, vertical: false)
         }
     }
 }

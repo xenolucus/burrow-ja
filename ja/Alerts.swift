@@ -105,7 +105,7 @@ struct AlertsCard: View {
                     picker("通知する空き容量", selection: $lowGB, values: [10, 20, 50, 100])
                 }
                 HStack(spacing: 12) {
-                    Text("クリーンできる量の確認").font(.system(size: 13))
+                    Text("クリーンできる量の確認").font(ThemeType.body)
                     Picker("クリーンできる量の確認", selection: Binding { checkDays } set: { days in
                         checkDays = days
                         if days > 0 { ask() }
@@ -122,14 +122,14 @@ struct AlertsCard: View {
                 Text("確認だけを行い、自動では削除しません。アプリが起動している間に動きます。").caption()
                 if denied {
                     Text("通知が許可されていません。「システム設定」の「通知」で Burrow JA をオンにしてください。")
-                        .font(.system(size: 12)).foregroundStyle(Theme.danger)
+                        .font(ThemeType.caption).foregroundStyle(Theme.danger)
                 }
                 Toggle("クリーン前の確認を省略", isOn: $skipConfirm)
                 Text("「今すぐクリーン」を押すとすぐに始まります。「Mole が残した項目」の削除は常に確認します。").caption()
                 Toggle("Dock にアイコンを表示しない", isOn: $hideDock)
                 Text("アプリはメニューバーのアイコンから開きます。「メニューバーに表示」がオフの間は Dock に表示します。").caption()
             }
-            .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+            .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
         }
         .onChange(of: hideDock) { DockIcon.apply() }
         .onChange(of: showInMenuBar) { DockIcon.apply() }
@@ -137,7 +137,7 @@ struct AlertsCard: View {
 
     private func picker(_ title: String, selection: Binding<Int>, values: [Int]) -> some View {
         HStack(spacing: 12) {
-            Text(title).font(.system(size: 13))
+            Text(title).font(ThemeType.body)
             Picker(title, selection: selection) {
                 ForEach(values, id: \.self) { Text("\($0) GB").tag($0) }
             }

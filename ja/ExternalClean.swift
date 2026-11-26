@@ -140,11 +140,11 @@ struct ExternalCleanCard: View {
                         Text("保護パスに FINDER_METADATA があるため、.DS_Store などはほとんど見つかりません。").caption()
                     }
                     if drives.isEmpty {
-                        Text("外付けドライブは接続されていません。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+                        Text("外付けドライブは接続されていません。").font(ThemeType.body).foregroundStyle(Theme.secondaryText)
                     }
                     ForEach(drives, id: \.self) { drive in
                         HStack {
-                            Text(verbatim: drive.lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                            Text(verbatim: drive.lastPathComponent).font(ThemeType.bodyStrong).lineLimit(1)
                             Spacer()
                             Button("プレビュー") { find(drive) }.buttonStyle(.pillSecondary).disabled(scanning != nil)
                             Button("今すぐクリーン") { askClean() }.buttonStyle(.pill)
@@ -165,27 +165,27 @@ struct ExternalCleanCard: View {
 
     @ViewBuilder private func results(_ caches: [ExternalCache]) -> some View {
         if caches.isEmpty {
-            Text("整理できるものは見つかりませんでした。").font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+            Text("整理できるものは見つかりませんでした。").font(ThemeType.body).foregroundStyle(Theme.secondaryText)
         }
         ForEach(caches) { cache in
             HStack {
                 Toggle(isOn: binding(cache)) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(cache.kind).font(.system(size: 13, weight: .medium))
+                        Text(cache.kind).font(ThemeType.bodyStrong)
                         Text(verbatim: cache.path).caption().lineLimit(1).truncationMode(.middle)
                     }
                 }
                 .toggleStyle(.checkbox)
                 Spacer()
-                Text(cache.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                Text(cache.bytes.bytesText).font(ThemeType.bodyBold).monospacedDigit()
                 if !cache.byMole {
                     Button("Finder で表示") { NSWorkspace.shared.selectFile(cache.path, inFileViewerRootedAtPath: "") }
-                        .buttonStyle(.link).font(.system(size: 12))
+                        .buttonStyle(.link).font(ThemeType.caption)
                 }
             }
         }
         if failed > 0 {
-            Text("\(failed) 項目を削除できませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+            Text("\(failed) 項目を削除できませんでした。").font(ThemeType.caption).foregroundStyle(Theme.danger)
         }
         if !caches.isEmpty {
             Text("チェックを外した項目は残します。").caption()
@@ -254,7 +254,7 @@ struct ExperimentalCard: View {
                 Toggle("外付けドライブのクリーン", isOn: $external)
                 Toggle("メニューバー項目のまとめ", isOn: Binding { hider.enabled } set: { hider.setEnabled($0) })
             }
-            .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+            .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
         }
     }
 }

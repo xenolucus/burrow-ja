@@ -75,7 +75,7 @@ struct MenuTweakCard: View {
                     Text("メニューバーの高さを超えた部分は切れます。").caption()
                     HStack {
                         Spacer()
-                        Button("この値を元に戻す") { update(metric) { $0 = MenuTweak() } }.buttonStyle(.link).font(.system(size: 12))
+                        Button("この値を元に戻す") { update(metric) { $0 = MenuTweak() } }.buttonStyle(.link).font(ThemeType.caption)
                     }
                 }
             }
@@ -85,9 +85,9 @@ struct MenuTweakCard: View {
     private func icons(_ metric: MenuMetric) -> some View {
         let current = MenuTweak.load(text)[metric.rawValue]?.symbol
         return LazyVGrid(columns: Array(repeating: GridItem(.fixed(34)), count: 8), alignment: .leading, spacing: 6) {
-            iconButton(nil, current: current, metric) { Text("なし").font(.system(size: 11)) }
+            iconButton(nil, current: current, metric) { Text("なし").font(ThemeType.micro) }
             ForEach(MenuTweak.symbols, id: \.self) { symbol in
-                iconButton(symbol, current: current, metric) { Image(systemName: symbol).font(.system(size: 13)) }
+                iconButton(symbol, current: current, metric) { Image(systemName: symbol).font(ThemeType.body) }
             }
         }
     }
@@ -105,9 +105,9 @@ struct MenuTweakCard: View {
     private func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, step: Double,
                         format: @escaping (Double) -> String) -> some View {
         HStack(spacing: 12) {
-            Text(title).font(.system(size: 13)).frame(width: 96, alignment: .leading)
+            Text(title).font(ThemeType.body).frame(minWidth: 96, alignment: .leading).fixedSize(horizontal: true, vertical: false)
             Slider(value: value, in: range, step: step).accessibilityLabel(title)
-            Text(format(value.wrappedValue)).font(.system(size: 13, weight: .medium)).monospacedDigit().frame(width: 48, alignment: .trailing)
+            Text(format(value.wrappedValue)).font(ThemeType.bodyStrong).monospacedDigit().frame(minWidth: 48, alignment: .trailing).fixedSize(horizontal: true, vertical: false)
         }
     }
 

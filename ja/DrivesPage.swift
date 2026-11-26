@@ -133,9 +133,9 @@ struct DrivesPage: View {
 
     private func row(_ title: String, _ value: String) -> some View {
         HStack {
-            Text(title).font(.system(size: 13)).foregroundStyle(Theme.secondaryText)
+            Text(title).font(ThemeType.body).foregroundStyle(Theme.secondaryText)
             Spacer()
-            Text(value).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Text(value).font(ThemeType.bodyStrong).lineLimit(1)
         }
     }
 
@@ -145,13 +145,13 @@ struct DrivesPage: View {
         ForEach(list.prefix(50)) { video in
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: (video.path as NSString).lastPathComponent).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(verbatim: (video.path as NSString).lastPathComponent).font(ThemeType.bodyStrong).lineLimit(1)
                     Text(video.lastUsed.formatted(date: .abbreviated, time: .omitted)).caption()
                 }
                 Spacer()
-                Text(video.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                Text(video.bytes.bytesText).font(ThemeType.bodyBold).monospacedDigit()
                 Button("Finder で表示") { NSWorkspace.shared.selectFile(video.path, inFileViewerRootedAtPath: "") }
-                    .buttonStyle(.link).font(.system(size: 12))
+                    .buttonStyle(.link).font(ThemeType.caption)
             }
         }
     }

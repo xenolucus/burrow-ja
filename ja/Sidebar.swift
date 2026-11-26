@@ -59,15 +59,15 @@ struct ContentCard: View {
                 HStack {
                     Text("サイドバー").cardTitle()
                     Spacer()
-                    Button("標準の順に戻す") { order = "" }.buttonStyle(.link).font(.system(size: 12)).disabled(order.isEmpty)
+                    Button("標準の順に戻す") { order = "" }.buttonStyle(.link).font(ThemeType.caption).disabled(order.isEmpty)
                 }
                 LazyVGrid(columns: [GridItem(.adaptive(minimum: 210), spacing: 18, alignment: .leading)], alignment: .leading, spacing: 4) {
                     ForEach(pages) { page in row(page) }
                 }
-                Text("追加コンテンツ").font(.system(size: 13, weight: .semibold))
+                Text("追加コンテンツ").font(ThemeType.bodyBold)
                 Text("元の Burrow にない機能です。不要なら外せます。").caption()
                 ForEach(Page.extras) { page in
-                    Toggle(page.title, isOn: binding(page)).font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                    Toggle(page.title, isOn: binding(page)).font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                 }
             }
         }
@@ -75,8 +75,8 @@ struct ContentCard: View {
 
     private func row(_ page: Page) -> some View {
         HStack(spacing: 4) {
-            Image(systemName: page.symbol).font(.system(size: 12)).frame(width: 20)
-            Text(page.title).font(.system(size: 13)).lineLimit(1)
+            Image(systemName: page.symbol).font(ThemeType.caption).frame(width: 20)
+            Text(page.title).font(ThemeType.body).lineLimit(1)
             Spacer()
             arrow("chevron.up", "\(page.title) を上へ", page, by: -1)
             arrow("chevron.down", "\(page.title) を下へ", page, by: 1)
@@ -88,7 +88,7 @@ struct ContentCard: View {
         return Button {
             if let result { order = Page.keepingHidden(result, in: Page.main(order: order, hidden: "")).map(\.rawValue).joined(separator: ",") }
         } label: {
-            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).frame(width: 24, height: 22).contentShape(Rectangle())
+            Image(systemName: symbol).font(ThemeType.microStrong).frame(width: 24, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain).disabled(result == nil).accessibilityLabel(label)
     }

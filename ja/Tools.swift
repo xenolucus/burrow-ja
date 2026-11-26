@@ -432,7 +432,7 @@ private struct CoverView: View {
                 case .wipe:
                     Text("画面を拭けます。Esc を2回押すか、3回クリックすると終わります。10分で自動で終わります。").foregroundStyle(.white.opacity(0.35))
                 case .keyboard:
-                    Text("キーボードを拭けます").font(.system(size: 26, weight: .semibold)).foregroundStyle(.white)
+                    Text("キーボードを拭けます").font(ThemeType.heading).foregroundStyle(.white)
                     Text("キーは入力されません。あと \(cover.secondsLeft) 秒で自動で終わります。").foregroundStyle(.white.opacity(0.7))
                     Button("終了する") { cover.stop() }.buttonStyle(.pill).padding(.top, 8)
                 case .monitor:
@@ -440,13 +440,13 @@ private struct CoverView: View {
                         Text("\(cover.pattern + 1)/\(Cover.patterns.count)　\(Cover.patterns[cover.pattern].name)　色空間: \(cover.wide ? "Display P3" : "sRGB")")
                         Text("\(cover.screenInfo)　クリックか → で次へ、← で前へ、P で色空間、Esc で終了")
                     }
-                    .font(.system(size: 12)).padding(6).background(.black.opacity(0.6)).foregroundStyle(.white)
+                    .font(ThemeType.caption).padding(6).background(.black.opacity(0.6)).foregroundStyle(.white)
                 case nil:
                     EmptyView()
                 }
                 Spacer().frame(height: 40)
             }
-            .font(.system(size: 14))
+            .font(ThemeType.leadRegular)
         }
         .ignoresSafeArea()
     }
@@ -494,12 +494,12 @@ private struct CoverView: View {
                             let level = Double(base + step) / 255
                             ZStack(alignment: .bottom) {
                                 color(level, level, level)
-                                Text("\(base + step)").font(.system(size: 11)).padding(.bottom, 90)
+                                Text("\(base + step)").font(ThemeType.micro).padding(.bottom, 90)
                                     .foregroundStyle(pattern == .nearBlack ? .white.opacity(0.5) : .black.opacity(0.5))
                             }
                         }
                     }
-                    .frame(height: 320)
+                    .frame(minHeight: 320)
                 }
             case .motion:
                 MotionTest()
@@ -602,16 +602,16 @@ private struct MotionTest: View {
                     let y = size.height * (0.25 + 0.17 * Double(row))
                     let x = (time * speed).truncatingRemainder(dividingBy: size.width + 120) - 120
                     context.fill(Path(CGRect(x: x, y: y, width: 120, height: 90)), with: .color(.white))
-                    context.draw(Text("\(Int(speed)) px/秒").font(.system(size: 13)).foregroundStyle(.white.opacity(0.6)),
+                    context.draw(Text("\(Int(speed)) px/秒").font(ThemeType.body).foregroundStyle(.white.opacity(0.6)),
                                  at: CGPoint(x: 70, y: y - 14))
                 }
                 // A skipped frame leaves one lamp dark when photographed.
                 for lamp in 0..<8 {
                     let lit = meter.count % 8 == lamp
-                    context.fill(Path(CGRect(x: size.width / 2 - 160 + Double(lamp) * 40, y: size.height * 0.82, width: 32, height: 32)),
+                    context.fill(Path(CGRect(x: size.width / 2 - 160 + CGFloat(lamp) * 40, y: size.height * 0.82, width: 32, height: 32)),
                                  with: .color(lit ? .white : Color(white: 0.3)))
                 }
-                context.draw(Text("実測 \(fps) fps").font(.system(size: 40, weight: .bold)).foregroundStyle(.white),
+                context.draw(Text("実測 \(fps) fps").font(ThemeType.display).foregroundStyle(.white),
                              at: CGPoint(x: size.width / 2, y: size.height * 0.12))
             }
         }
@@ -686,7 +686,7 @@ struct ToolsPage: View {
             }
             if needsPermission && !KeyboardLock.allowed {
                 Text("キーボードを止めるには「システム設定」→「プライバシーとセキュリティ」→「アクセシビリティ」で Burrow JA をオンにしてください。")
-                    .font(.system(size: 12)).foregroundStyle(Theme.danger)
+                    .font(ThemeType.caption).foregroundStyle(Theme.danger)
             }
         }
         .task {
@@ -707,10 +707,10 @@ struct ToolsPage: View {
                 }
                 ForEach(temperatures, id: \.place) { item in
                     HStack {
-                        Text(item.place).font(.system(size: 13))
+                        Text(item.place).font(ThemeType.body)
                         Spacer()
-                        Text(String(format: "%.1f℃", item.average)).font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                        Text(String(format: "最高 %.0f℃・%d 個", item.maximum, item.count)).caption().fixedSize(horizontal: false, vertical: true).frame(width: 96, alignment: .trailing)
+                        Text(String(format: "%.1f℃", item.average)).font(ThemeType.bodyBold).monospacedDigit()
+                        Text(String(format: "最高 %.0f℃・%d 個", item.maximum, item.count)).caption().fixedSize(horizontal: false, vertical: true).frame(minWidth: 96, alignment: .trailing).fixedSize(horizontal: true, vertical: false)
                     }
                 }
                 Text("Mac に外気温のセンサーはありません。「吸気」が本体に入る空気の温度で、外気にいちばん近い値です。項目の分け方はセンサー名からの推定です。").caption().fixedSize(horizontal: false, vertical: true)
@@ -768,9 +768,9 @@ struct ToolsPage: View {
                 ForEach(fans.indices, id: \.self) { index in
                     let fan = fans[index]
                     HStack {
-                        Text("ファン \(fan.index + 1)").font(.system(size: 13))
+                        Text("ファン \(fan.index + 1)").font(ThemeType.body)
                         Spacer()
-                        Text("\(Int(fan.actual)) rpm").font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                        Text("\(Int(fan.actual)) rpm").font(ThemeType.bodyBold).monospacedDigit()
                         Text("（\(Int(fan.minimum))〜\(Int(fan.maximum))）").caption().fixedSize(horizontal: false, vertical: true)
                     }
                 }
@@ -780,18 +780,18 @@ struct ToolsPage: View {
                             if !editing { setFans(fanShare) }
                         })
                         .disabled(fanBusy).accessibilityLabel("ファンの回転数")
-                        Text("\(Int(SMC.target(first, share: fanShare))) rpm").font(.system(size: 13, weight: .medium)).monospacedDigit()
-                            .frame(width: 76, alignment: .trailing)
+                        Text("\(Int(SMC.target(first, share: fanShare))) rpm").font(ThemeType.bodyStrong).monospacedDigit()
+                            .frame(minWidth: 76, alignment: .trailing).fixedSize(horizontal: true, vertical: false)
                         Button("自動") { setFans(nil) }.buttonStyle(.pillSecondary).disabled(fanBusy)
                     }
                     Text("スライダーを離すと反映します。ファンが2つあれば、どちらも同じ割合にします。").caption().fixedSize(horizontal: false, vertical: true)
                     Text(fans.contains(where: \.manual) ? "固定中です。温度が上がっても速くなりません。使い終わったら「自動」に戻してください。"
                          : "今は macOS が温度に合わせて決めています。")
-                        .font(.system(size: 12)).foregroundStyle(fans.contains(where: \.manual) ? Theme.danger : Theme.secondaryText)
+                        .font(ThemeType.caption).foregroundStyle(fans.contains(where: \.manual) ? Theme.danger : Theme.secondaryText)
                     Text("変更のたびに管理者パスワードを求めます。最低回転数より遅くはしません。").caption().fixedSize(horizontal: false, vertical: true)
                 }
                 if fanFailed {
-                    Text("変更できませんでした。この Mac では対応していないかもしれません。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+                    Text("変更できませんでした。この Mac では対応していないかもしれません。").font(ThemeType.caption).foregroundStyle(Theme.danger)
                 }
             }
         }
@@ -847,14 +847,14 @@ struct TrashCard: View {
                         Text("Mole は Mac のゴミ箱だけを空にします。外付けドライブと iCloud Drive のゴミ箱は Finder で空にします。").caption().fixedSize(horizontal: false, vertical: true)
                         ForEach(places) { place in
                             HStack {
-                                Text(verbatim: place.name).font(.system(size: 13))
+                                Text(verbatim: place.name).font(ThemeType.body)
                                 Spacer()
-                                Text(place.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                                Text(place.bytes.bytesText).font(ThemeType.bodyBold).monospacedDigit()
                             }
                         }
                         if failed {
                             Text("Finder を操作できませんでした。「システム設定」→「プライバシーとセキュリティ」→「オートメーション」で Burrow JA の Finder をオンにしてください。")
-                                .font(.system(size: 12)).foregroundStyle(Theme.danger)
+                                .font(ThemeType.caption).foregroundStyle(Theme.danger)
                         }
                         HStack {
                             Spacer()

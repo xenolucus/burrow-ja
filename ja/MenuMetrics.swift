@@ -431,8 +431,8 @@ struct PowerRow: View {
 
     private func item(_ title: String, _ value: String) -> some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(title).font(.system(size: 11)).foregroundStyle(Theme.secondaryText)
-            Text(value).font(.system(size: 14, weight: .semibold)).monospacedDigit()
+            Text(title).font(ThemeType.micro).foregroundStyle(Theme.secondaryText)
+            Text(value).font(ThemeType.lead).monospacedDigit()
         }
     }
 }
@@ -470,14 +470,14 @@ struct MenuMetricsCard: View {
                             Toggle("ラベル", isOn: $labels).help("CPU、MEM、入、使などの文字")
                             Toggle("幅を固定", isOn: $fixedWidth).help("数値が変わっても位置が動きません。代わりに余白が増えます。")
                         }
-                        .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                        .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                         slider("値どうしの間隔", $gap, 2...24)
                         slider("左の余白", $leading, 0...12)
                         slider("右の余白", $trailing, 0...12)
                         slider("上下の位置", $offset, -4...4)
                         slider("行の間隔", $lineGap, -2...4)
                         HStack(spacing: 12) {
-                            Text("更新の間隔").font(.system(size: 13)).frame(width: 96, alignment: .leading)
+                            Text("更新の間隔").font(ThemeType.body).frame(minWidth: 96, alignment: .leading).fixedSize(horizontal: true, vertical: false)
                             Picker("更新の間隔", selection: $interval) {
                                 ForEach([2, 5, 10, 30], id: \.self) { Text("\($0)秒").tag($0) }
                             }
@@ -498,16 +498,16 @@ struct MenuMetricsCard: View {
 
     private func slider(_ title: String, _ value: Binding<Double>, _ range: ClosedRange<Double>) -> some View {
         HStack(spacing: 12) {
-            Text(title).font(.system(size: 13)).frame(width: 96, alignment: .leading)
+            Text(title).font(ThemeType.body).frame(minWidth: 96, alignment: .leading).fixedSize(horizontal: true, vertical: false)
             Slider(value: value, in: range, step: 1).accessibilityLabel(title)
-            Text("\(Int(value.wrappedValue)) pt").font(.system(size: 13, weight: .medium)).monospacedDigit()
-                .frame(width: 40, alignment: .trailing)
+            Text("\(Int(value.wrappedValue)) pt").font(ThemeType.bodyStrong).monospacedDigit()
+                .frame(minWidth: 40, alignment: .trailing).fixedSize(horizontal: true, vertical: false)
         }
     }
 
     private func row(_ metric: MenuMetric) -> some View {
         HStack(spacing: 6) {
-            Toggle(metric.title, isOn: binding(metric)).font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+            Toggle(metric.title, isOn: binding(metric)).font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
             Spacer()
             if selected.contains(metric) {
                 arrow("chevron.up", "\(metric.title) を前へ", metric, by: -1)
@@ -518,7 +518,7 @@ struct MenuMetricsCard: View {
 
     private func arrow(_ symbol: String, _ label: String, _ metric: MenuMetric, by offset: Int) -> some View {
         Button { save(MenuMetric.moved(metric, by: offset, in: selected) ?? selected) } label: {
-            Image(systemName: symbol).font(.system(size: 11, weight: .semibold)).frame(width: 26, height: 22).contentShape(Rectangle())
+            Image(systemName: symbol).font(ThemeType.microStrong).frame(width: 26, height: 22).contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(MenuMetric.moved(metric, by: offset, in: selected) == nil)
@@ -529,7 +529,7 @@ struct MenuMetricsCard: View {
         Button { style = option.rawValue } label: {
             HStack(spacing: 10) {
                 Image(systemName: style == option.rawValue ? "checkmark.circle.fill" : "circle")
-                Text(option.title).font(.system(size: 13)).frame(width: 74, alignment: .leading)
+                Text(option.title).font(ThemeType.body).frame(minWidth: 74, alignment: .leading).fixedSize(horizontal: true, vertical: false)
                 Image(nsImage: MenuMetric.image(selected, look: MenuLook(style: option, labels: labels, gap: gap, fixedWidth: fixedWidth,
                                                                          leading: leading, trailing: trailing, offset: offset, lineGap: lineGap,
                                                                          tweaks: MenuTweak.load(tweaks)),

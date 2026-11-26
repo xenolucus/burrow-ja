@@ -170,10 +170,10 @@ struct SystemDataPage: View {
         GlowCard(glow: size.part.shared ? .graphite : .blue, style: .rim, padding: 18) {
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
-                    Text(size.part.name).font(.system(size: 13, weight: .medium))
+                    Text(size.part.name).font(ThemeType.bodyStrong)
                     if size.part.shared { Text("Mac 全体").caption() }
                     Spacer()
-                    Text(size.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                    Text(size.bytes.bytesText).font(ThemeType.bodyBold).monospacedDigit()
                 }
                 GeometryReader { proxy in
                     Capsule().fill(Theme.hairline)
@@ -192,7 +192,7 @@ struct SystemDataPage: View {
                     Button("Finder で表示") {
                         NSWorkspace.shared.selectFile(nil, inFileViewerRootedAtPath: SystemData.expand(size.part.roots[0], home: NSHomeDirectory()))
                     }
-                    .buttonStyle(.link).font(.system(size: 12))
+                    .buttonStyle(.link).font(ThemeType.caption)
                 }
             }
         }

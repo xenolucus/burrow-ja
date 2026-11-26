@@ -40,16 +40,16 @@ struct ManualGuideButton: View {
     var body: some View {
         if let guide = ManualGuide.all[name] {
             Button("消し方") { showing = true }
-                .buttonStyle(.link).font(.system(size: 12, weight: .medium))
+                .buttonStyle(.link).font(ThemeType.captionStrong)
                 .popover(isPresented: $showing, arrowEdge: .bottom) { content(guide) }
         }
     }
 
     private func content(_ guide: ManualGuide) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text(guide.text).font(.system(size: 12.5)).fixedSize(horizontal: false, vertical: true)
+            Text(guide.text).font(ThemeType.caption).fixedSize(horizontal: false, vertical: true)
             if let command = guide.command {
-                Text(command).font(.system(size: 12, design: .monospaced)).textSelection(.enabled)
+                Text(command).font(ThemeType.mono).textSelection(.enabled)
             }
             HStack(spacing: 12) {
                 if let command = guide.command {
@@ -67,8 +67,8 @@ struct ManualGuideButton: View {
                     }
                 }
             }
-            .buttonStyle(.link).font(.system(size: 12))
+            .buttonStyle(.link).font(ThemeType.caption)
         }
-        .padding(14).frame(width: 340, alignment: .leading)
+        .padding(14).frame(minWidth: 340, alignment: .leading).fixedSize(horizontal: true, vertical: false)
     }
 }

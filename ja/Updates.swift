@@ -29,7 +29,7 @@ struct UpdatesCard: View {
                 }
                 Spacer()
                 Toggle("自動で確認", isOn: $automatic)
-                    .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                    .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                     .onChange(of: automatic) { _, on in AppUpdates.controller?.updater.automaticallyChecksForUpdates = on }
                 Button("今すぐ確認") { AppUpdates.check() }
                     .buttonStyle(.pillSecondary)

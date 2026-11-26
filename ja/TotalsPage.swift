@@ -98,10 +98,10 @@ struct TotalsPage: View {
             ForEach(TotalsStore.breakdown(records), id: \.kind) { row in
                 GlowCard(glow: .graphite, style: .plain, padding: 18) {
                     HStack {
-                        Text(TotalsStore.title(row.kind)).font(.system(size: 14, weight: .medium))
+                        Text(TotalsStore.title(row.kind)).font(ThemeType.lead)
                         Spacer()
                         Text("\(row.runs) 回").caption()
-                        Text(row.bytes.bytesText).font(.system(size: 18, weight: .semibold)).monospacedDigit()
+                        Text(row.bytes.bytesText).font(ThemeType.title).monospacedDigit()
                             .frame(minWidth: 110, alignment: .trailing)
                     }
                 }

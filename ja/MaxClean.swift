@@ -43,7 +43,7 @@ struct MaxCleanCard: View {
                     entries = MaxClean.entries(entries, on: on)
                     ConfigList.whitelist.write(entries)
                 })
-                .font(.system(size: 13)).toggleStyle(.switch).controlSize(.small)
+                .font(ThemeType.body).toggleStyle(.switch).controlSize(.small)
                 Text("作り直せるキャッシュの保護を外します。次回の起動が遅くなったり、再ダウンロードが発生したりします。iCloud、アプリの設定、Ollama のモデルは保護したままです。オフに戻すと保護も戻ります。").caption()
             }
         }

@@ -148,10 +148,10 @@ struct RemainingCard: View {
                         Text(caption).caption()
                         ForEach(shown) { row($0) }
                         if items.count > shown.count {
-                            Button("すべて表示（\(items.count)件）") { showAll = true }.buttonStyle(.link).font(.system(size: 12))
+                            Button("すべて表示（\(items.count)件）") { showAll = true }.buttonStyle(.link).font(ThemeType.caption)
                         }
                         if failed > 0 {
-                            Text("\(failed) 項目を削除できませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+                            Text("\(failed) 項目を削除できませんでした。").font(ThemeType.caption).foregroundStyle(Theme.danger)
                         }
                         HStack {
                             Spacer()
@@ -170,7 +170,7 @@ struct RemainingCard: View {
                 if on { selected.insert(item.id) } else { selected.remove(item.id) }
             }) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(verbatim: item.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+                    Text(verbatim: item.name).font(ThemeType.bodyStrong).lineLimit(1)
                     if let note = item.note {
                         Text(note).caption()
                     } else if item.owner == "com.spotify.client" {
@@ -183,9 +183,9 @@ struct RemainingCard: View {
             .toggleStyle(.checkbox)
             .disabled(!item.removable)
             Spacer()
-            Text(item.bytes.bytesText).font(.system(size: 13, weight: .semibold)).monospacedDigit()
+            Text(item.bytes.bytesText).font(ThemeType.bodyBold).monospacedDigit()
             Button("Finder で表示") { NSWorkspace.shared.selectFile(item.path, inFileViewerRootedAtPath: "") }
-                .buttonStyle(.link).font(.system(size: 12))
+                .buttonStyle(.link).font(ThemeType.caption)
         }
     }
 

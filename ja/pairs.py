@@ -64,6 +64,7 @@ T = {
     R('    @AppStorage("showInMenuBar") private var showInMenuBar = true\n\n    var body: some Scene {',
       '    @AppStorage("showInMenuBar") private var showInMenuBar = true\n\n    init() { SMC.runCommandIfAsked() }\n\n    var body: some Scene {'),
     R('NSApp.setActivationPolicy(.regular)\n        NSApp.activate()', 'DockIcon.apply()'),
+    R('        .defaultSize(width: 1280, height: 820)', '        .defaultSize(width: WindowSize.saved.width, height: WindowSize.saved.height)'),
     R('                ForEach(Page.allCases) { page in\n                    Button(page.title)', '                ForEach(Page.current) { page in\n                    Button(page.title)'),
     q("Check for Updates…", "アップデートを確認…"),
     R('updater = SPUStandardUpdaterController(startingUpdater: true, updaterDelegate: nil, userDriverDelegate: nil)',
@@ -224,6 +225,7 @@ T = {
     R(r'''"\(items) item\(items == 1 ? "" : "s"), \(chosen.map(\.bytes).reduce(0, +).bytesText). You can restore them from the Trash."''', r'''"\(items) 項目、\(chosen.map(\.bytes).reduce(0, +).bytesText)。ゴミ箱から戻せます。"'''),
 ],
 "Features/OverviewPage.swift": [
+    R('HStack { Text("Battery").cardTitle(); Spacer(); if let st = b?.status { Tag(text: st) } }', 'HStack { Text("Battery").cardTitle().layoutPriority(1).lineLimit(1); Spacer(); if let st = b?.status { Tag(text: st).fixedSize() } }'),
     R('"--interval", "2s"', '"--interval", MenuMetric.intervalArgument'),
     R('    func release(_ owner: String) {\n', '    var isRunning: Bool { task != nil }\n    func pause() { stop() }\n    func resume() { if !owners.isEmpty { start() } }\n\n    func release(_ owner: String) {\n'),
     R('    @Published var pressure: MemoryPressure?\n', '    @Published var pressure: MemoryPressure?\n    @Published var power: PowerMeter.Reading?\n    private let powerMeter = PowerMeter()\n'),
@@ -305,7 +307,7 @@ T = {
 ],
 "Features/SettingsPage.swift": [
     R('VStack(alignment: .leading, spacing: 18) {\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard(', 'VStack(alignment: .leading, spacing: 18) {\n            MaxCleanCard(entries: $whitelist)\n\n            HStack(alignment: .top, spacing: 18) {\n                PathListCard('),
-    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'UpdatesCard()\n\n            AlertsCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
+    R('GlowCard(glow: .ember, style: .rim, padding: 22) {', 'WindowSizeCard()\n\n            UpdatesCard()\n\n            AlertsCard()\n\n            ContentCard()\n\n            ExperimentalCard()\n\n            GlowCard(glow: .ember, style: .rim, padding: 22) {'),
     q("Protected paths", "保護パス"), q("Clean, Optimize and Slim never touch these. Wildcards like * work.", "クリーン、最適化、スリム化はここを変更しません。* などのワイルドカードも使えます。"),
     q("Project scan folders", "プロジェクトのスキャン対象"), q("Where Projects looks for build folders.", "ビルドフォルダを探す場所です。"),
     q("Your whole home folder is slow to scan and can time out. Project folders work best.", "ホームフォルダ全体は時間がかかり、タイムアウトすることがあります。プロジェクトフォルダの指定をおすすめします。"),

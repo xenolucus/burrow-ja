@@ -147,21 +147,21 @@ struct DuplicatesPage: View {
                     HStack {
                         Text("探す場所").cardTitle()
                         Spacer()
-                        Button("フォルダを追加") { add() }.buttonStyle(.link).font(.system(size: 12))
+                        Button("フォルダを追加") { add() }.buttonStyle(.link).font(ThemeType.caption)
                     }
                     ForEach(folders, id: \.self) { folder in
                         HStack {
-                            Text(verbatim: folder).font(.system(size: 13)).lineLimit(1).truncationMode(.middle)
+                            Text(verbatim: folder).font(ThemeType.body).lineLimit(1).truncationMode(.middle)
                             Spacer()
                             Button("外す") { saved = folders.filter { $0 != folder }.joined(separator: "\n") }
-                                .buttonStyle(.link).font(.system(size: 12)).disabled(folders.count == 1)
+                                .buttonStyle(.link).font(ThemeType.caption).disabled(folders.count == 1)
                         }
                     }
                     ForEach(drives, id: \.self) { drive in
                         Toggle("\(drive.lastPathComponent)（外付けドライブ）", isOn: Binding { chosenDrives.contains(drive) } set: { on in
                             if on { chosenDrives.insert(drive) } else { chosenDrives.remove(drive) }
                         })
-                        .font(.system(size: 13)).toggleStyle(.checkbox)
+                        .font(ThemeType.body).toggleStyle(.checkbox)
                     }
                     if !chosenDrives.isEmpty {
                         Text("外付けドライブ全体を比べるので時間がかかることがあります。ゴミ箱に入れた分は、そのドライブのゴミ箱を空にすると空きます。").caption()
@@ -194,7 +194,7 @@ struct DuplicatesPage: View {
         } else {
             HStack {
                 Text("\(groups.count) 組の重複。\(chosen.count) 項目、\(chosen.reduce(Int64(0)) { $0 + $1.bytes }.bytesText) を選択中")
-                    .font(.system(size: 13, weight: .medium))
+                    .font(ThemeType.bodyStrong)
                 Spacer()
                 Button("残りは新しいものを残す") { selectRest(groups) }.buttonStyle(.pillSecondary)
                 Button("ゴミ箱に入れる") { ask() }.buttonStyle(.pill).disabled(selected.isEmpty)
@@ -202,11 +202,11 @@ struct DuplicatesPage: View {
             Text("ダウンロードにあるものは、最初から選択しています。").caption()
             ForEach(DuplicateFinder.folderSets(groups, home: NSHomeDirectory())) { folderSet($0) }
             if failed > 0 {
-                Text("\(failed) 項目をゴミ箱に入れられませんでした。").font(.system(size: 12)).foregroundStyle(Theme.danger)
+                Text("\(failed) 項目をゴミ箱に入れられませんでした。").font(ThemeType.caption).foregroundStyle(Theme.danger)
             }
             ForEach(groups.prefix(limit)) { card($0) }
             if groups.count > limit {
-                Button("さらに表示") { limit += 30 }.buttonStyle(.link).font(.system(size: 12))
+                Button("さらに表示") { limit += 30 }.buttonStyle(.link).font(ThemeType.caption)
             }
         }
     }
@@ -214,11 +214,11 @@ struct DuplicatesPage: View {
     private func folderSet(_ set: DuplicateFolderSet) -> some View {
         GlowCard(glow: .sage, style: .rim, padding: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("同じフォルダどうしの重複 \(set.groups.count) 組（\(set.extra.bytesText)）").font(.system(size: 13, weight: .semibold))
+                Text("同じフォルダどうしの重複 \(set.groups.count) 組（\(set.extra.bytesText)）").font(ThemeType.bodyBold)
                 Text("残すフォルダを選ぶと、ほかのフォルダのコピーをまとめて選択します。").caption()
                 ForEach(set.folders, id: \.self) { folder in
                     HStack {
-                        Text(verbatim: (folder as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                        Text(verbatim: (folder as NSString).abbreviatingWithTildeInPath).font(ThemeType.caption).lineLimit(1).truncationMode(.middle)
                         Spacer()
                         Button(keptFolders[set.id] == folder ? "残します" : "ここを残す") { keep(folder, in: set) }
                             .buttonStyle(.pillSecondary).disabled(keptFolders[set.id] == folder)
@@ -242,19 +242,19 @@ struct DuplicatesPage: View {
     private func card(_ group: DuplicateGroup) -> some View {
         GlowCard(glow: .blue, style: .rim, padding: 18) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("\(group.bytes.bytesText) × \(group.files.count)").font(.system(size: 13, weight: .semibold)).monospacedDigit()
+                Text("\(group.bytes.bytesText) × \(group.files.count)").font(ThemeType.bodyBold).monospacedDigit()
                 ForEach(group.files) { file in
                     HStack {
                         Toggle(isOn: Binding { selected.contains(file.path) } set: { on in
                             if on { selected.insert(file.path) } else { selected.remove(file.path) }
                         }) {
-                            Text(verbatim: (file.path as NSString).abbreviatingWithTildeInPath).font(.system(size: 12)).lineLimit(1).truncationMode(.middle)
+                            Text(verbatim: (file.path as NSString).abbreviatingWithTildeInPath).font(ThemeType.caption).lineLimit(1).truncationMode(.middle)
                         }
                         .toggleStyle(.checkbox)
                         .disabled(!selected.contains(file.path) && !DuplicateFinder.canSelect(file.path, in: group, selected: selected))
                         Spacer()
                         Button("Finder で表示") { NSWorkspace.shared.selectFile(file.path, inFileViewerRootedAtPath: "") }
-                            .buttonStyle(.link).font(.system(size: 12))
+                            .buttonStyle(.link).font(ThemeType.caption)
                     }
                 }
             }

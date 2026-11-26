@@ -48,7 +48,7 @@ struct HeavyAppsCard: View {
                         HStack {
                             Text("負荷の高いアプリ").cardTitle()
                             Spacer()
-                            Button("更新") { Task { await reload() } }.buttonStyle(.link).font(.system(size: 12))
+                            Button("更新") { Task { await reload() } }.buttonStyle(.link).font(ThemeType.caption)
                         }
                         Text("補助プロセスもアプリごとに合計した今の CPU 使用率です。100% でコア1つ分です。").caption()
                         ForEach(apps) { row($0) }
@@ -61,9 +61,9 @@ struct HeavyAppsCard: View {
 
     private func row(_ app: HeavyApp) -> some View {
         HStack {
-            Text(verbatim: app.name).font(.system(size: 13, weight: .medium)).lineLimit(1)
+            Text(verbatim: app.name).font(ThemeType.bodyStrong).lineLimit(1)
             Spacer()
-            Text("\(Int(app.cpu))%").font(.system(size: 13, weight: .semibold)).monospacedDigit()
+            Text("\(Int(app.cpu))%").font(ThemeType.bodyBold).monospacedDigit()
             Button("終了") { quit(app) }.buttonStyle(.pillSecondary)
         }
     }
