@@ -100,6 +100,10 @@ clean_tool_cache() {
         fi
         [[ $size_rc -eq 0 ]] || size_before_kb=""
         "$@" > /dev/null 2>&1 || command_rc=$?
+        # Record a successful owner cleanup before result sizing can be interrupted.
+        if [[ $command_rc -eq 0 && "${1:-}" != ":" ]]; then
+            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "${cache_path:-$description}" "owner command: $description"
+        fi
         local freed_kb=0 after_rc=0
         if [[ $command_rc -eq 0 && -n "$size_before_kb" ]]; then
             local size_after_kb=0
@@ -122,13 +126,7 @@ clean_tool_cache() {
                 echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $description"
             fi
             note_activity
-            # The owner command changed the Mac, so it gets an operations.log
-            # row like every other sink. A ":" placeholder changed nothing.
-            if [[ "${1:-}" != ":" ]]; then
-                log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "${cache_path:-$description}" "owner command: $description"
-            fi
-            # Ctrl-C while measuring the result reaches only the measuring
-            # child; the command already ran, so record it, then stop.
+            # Preserve an interruption reported by the sizing child.
             if mole_rc_signal "$after_rc"; then
                 _mole_record_clean_cancellation "$after_rc" "$description"
                 return "$after_rc"
@@ -1067,7 +1065,11 @@ _run_go_cache_clean_bound() {
         return 1
     fi
 
-    local -a command_args=(env "$cache_kind=$physical_root" go clean)
+    # GOFLAGS is pinned to the harmless -modcacherw because `go clean` honors
+    # it: a `-modcache` or `-fuzzcache` exported or saved with `go env -w` would
+    # empty a cache whose root was never checked above, and an empty value does
+    # not override the saved one.
+    local -a command_args=(env GOFLAGS=-modcacherw "$cache_kind=$physical_root" go clean)
     if [[ "$owner_dry_run" == "true" ]]; then
         command_args+=(-n)
     fi
@@ -1159,6 +1161,10 @@ clean_go_cache_root() {
         "$lexical_parent" "$lexical_parent_id" "$lexical_target_id" \
         "$physical_parent" "$physical_parent_id" "$physical_target_id" \
         "$cache_kind" "$clean_flag" "$DRY_RUN" || command_status=$?
+    # Record the completed cleanup before measuring the remaining cache.
+    if [[ "$DRY_RUN" != "true" && $command_status -eq 0 ]]; then
+        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: $display_name"
+    fi
     local after_rc=0
     if [[ "$DRY_RUN" != "true" && $command_status -eq 0 && -n "$size_before_kb" ]]; then
         local size_after_kb=0
@@ -1184,10 +1190,6 @@ clean_go_cache_root() {
             echo -e "  ${GREEN}${ICON_SUCCESS}${NC} $display_name"
         fi
         note_activity
-        # A dry run ran `go clean -n`, which changes nothing.
-        if [[ "$DRY_RUN" != "true" ]]; then
-            log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: $display_name"
-        fi
         if mole_rc_signal "$after_rc"; then
             _mole_record_clean_cancellation "$after_rc" "$display_name"
             return "$after_rc"
@@ -1409,6 +1411,51 @@ clean_rust_dependency_cache_root() {
         "$display_name" \
         "$cache_root"/* \
         "$display_name"
+}
+
+# Instruments leaves instruments<token>.ktrace in the per-user Darwin temp
+# root when a recording is closed without saving (one report: 14 files, 9.0
+# GB). Only that exact name directly in the getconf temp root, a regular file
+# with one link owned by the user, a day old, and only while Instruments is
+# not running; an unknown process state keeps them. Mole Mac's
+# InstrumentsTracePolicy uses the same shape and age.
+clean_instruments_unsaved_traces() {
+    local root resolved entry name token mtime now links
+    root=$(_mole_darwin_user_temp_dir) || return 0
+    [[ -n "$root" && -d "$root" && ! -L "${root%/}" ]] || return 0
+    resolved=$(cd -P "$root" 2> /dev/null && pwd) || return 0
+    local -a traces=()
+    now=$(get_epoch_seconds)
+    [[ "$now" =~ ^[0-9]+$ ]] || return 0
+    for entry in "$resolved"/instruments*.ktrace; do
+        [[ -f "$entry" && ! -L "$entry" && -O "$entry" ]] || continue
+        name="${entry##*/}"
+        token="${name#instruments}"
+        token="${token%.ktrace}"
+        [[ ${#token} -ge 1 && ${#token} -le 64 && "$token" =~ ^[A-Za-z0-9]+$ ]] || continue
+        links=$("$STAT_BSD" -f %l "$entry" 2> /dev/null) || continue
+        [[ "$links" == "1" ]] || continue
+        mtime=$(get_file_mtime "$entry")
+        [[ "$mtime" =~ ^[0-9]+$ && $mtime -gt 0 && $mtime -le $now && $((now - mtime)) -ge 86400 ]] || continue
+        traces+=("$entry")
+    done
+    [[ ${#traces[@]} -gt 0 ]] || return 0
+    local state=0
+    _instruments_running || state=$?
+    if [[ $state -ne 1 ]]; then
+        debug_log "Keeping Instruments traces, Instruments is running or its state is unknown"
+        return 0
+    fi
+    # The guard asks again after sizing and at the final sink.
+    local rc=0
+    _dev_safe_clean_process_guarded _instruments_running "Instruments" "Instruments unsaved traces" \
+        "${traces[@]}" "Instruments unsaved traces" || rc=$?
+    [[ $rc -eq 1 ]] && return 0
+    return "$rc"
+}
+
+_instruments_running() {
+    mole_pgrep_any -x Instruments -f '/Instruments[.]app/'
 }
 
 # Rust/cargo caches. Honor CARGO_HOME / RUSTUP_HOME when they point at a
@@ -1708,12 +1755,15 @@ clean_dev_nix() {
     command -v nix-store > /dev/null 2>&1 || return 0
     clean_tool_cache "Nix store garbage" "/nix/store" run_with_timeout "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" nix-store --gc || return $?
 }
-# Cloud CLI caches.
+# Cloud CLI caches. ~/.aws/cli/cache stays: it holds the temporary credentials
+# of assumed roles and SSO sessions, and removing it signs the user out. For
+# the same reason only kubectl's own discovery and HTTP caches go from
+# ~/.kube/cache: credential plugins keep their tokens beside them (kubelogin's
+# oidc-login, Azure kubelogin, aws-iam-authenticator).
 clean_dev_cloud() {
     clean_github_cli_cache || return $?
-    safe_clean ~/.kube/cache/* "Kubernetes cache"
+    safe_clean ~/.kube/cache/discovery ~/.kube/cache/http "Kubernetes cache"
     safe_clean ~/.local/share/containers/storage/tmp/* "Container storage temp"
-    safe_clean ~/.aws/cli/cache/* "AWS CLI cache"
     safe_clean ~/.config/gcloud/logs/* "Google Cloud logs"
     safe_clean ~/.azure/logs/* "Azure CLI logs"
 }
@@ -2553,7 +2603,7 @@ clean_xcode_device_support() {
                         break
                     fi
                     if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                        record_dry_run_cleanup_target "$stale_entry" "$entry_size_kb" 1 "$size_known" || continue
+                        mole_record_user_sink_dry_run_target "$stale_entry" "$entry_size_kb" 1 "$size_known" || continue
                     fi
                     preview_stale_dirs+=("$stale_entry")
                     stale_size_kb=$((stale_size_kb + entry_size_kb))
@@ -4264,7 +4314,7 @@ _automation_browser_process_records() {
             command = $9
             for (i = 10; i <= NF; i++) command = command " " $i
         }
-        command ~ /playwright_chromiumdev_profile/ {
+        command ~ /(playwright_chromiumdev_profile|puppeteer_dev_chrome_profile|puppeteer_dev_firefox_profile)/ {
             print $1 "|" $4 " " $5 " " $6 " " $7 " " $8
         }'
 }
@@ -4310,7 +4360,9 @@ clean_dev_automation_browsers() {
     if [[ -n "$tmpdir" ]]; then
         local d now age_hours
         now=$(date +%s)
-        for d in "$tmpdir"playwright_chromiumdev_profile-*; do
+        for d in "$tmpdir"playwright_chromiumdev_profile-* \
+            "$tmpdir"puppeteer_dev_chrome_profile-* \
+            "$tmpdir"puppeteer_dev_firefox_profile-*; do
             [[ -d "$d" ]] || continue
             age_hours=$(((now - $("$STAT_BSD" -f %m "$d" 2> /dev/null || echo "$now")) / 3600))
             [[ "$age_hours" -ge 2 ]] || continue
@@ -4379,6 +4431,7 @@ clean_dev_ai_agents() {
     local -a agent_specs=(
         "$HOME/.local/share/claude/versions|Claude Code old version|$HOME/.local/bin/claude"
         "$HOME/.local/share/cursor-agent/versions|Cursor Agent old version|$HOME/.local/bin/cursor-agent"
+        "$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/share/cursor-agent/versions|Cursor Agent old version|$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker/agent-cli/.local/bin/cursor-agent"
         "$HOME/.copilot/pkg/universal|GitHub Copilot CLI old version|$HOME/.local/bin/copilot"
     )
 
@@ -4486,7 +4539,9 @@ clean_dev_cicd() {
     safe_clean ~/.cache/gitlab-runner/* "GitLab Runner cache"
     safe_clean ~/.github/cache/* "GitHub Actions cache"
     safe_clean ~/.circleci/cache/* "CircleCI cache"
-    safe_clean ~/.sonar/* "SonarQube cache"
+    # ~/.sonar is the SonarScanner user home: its downloads live in cache/,
+    # while ssl/ holds the truststore and keystore the user created.
+    safe_clean ~/.sonar/cache/* "SonarQube cache"
 }
 # Database tool caches.
 clean_dev_database() {
@@ -4676,33 +4731,42 @@ clean_codex_desktop_caches() {
         return 0
     fi
 
-    # Measured on ChatGPT 26.727.40816: these six Chromium leaves reclaimed
-    # 313,860 KiB. Local Storage, IndexedDB, cookies, sessions, preferences, and
-    # every Application Support sibling are deliberate non-targets because they
-    # can hold durable state rather than rebuildable cache data.
+    # Measured on ChatGPT 26.727.40816: these Chromium leaves reclaimed
+    # hundreds of megabytes. Dynamic webview partitions (codex-browser-app,
+    # MCP sandboxes) live under Default/Partitions/. Local Storage, IndexedDB,
+    # cookies, sessions, preferences, and every Application Support sibling
+    # are deliberate non-targets because they can hold durable state rather
+    # than rebuildable cache data.
     local -a profiles=(
         "$cache_root/Default"
-        "$cache_root/Default/Partitions/codex-browser-app"
         "$cache_root/codex-browser-app"
     )
-    local -a leaves=("Cache" "Code Cache")
-    local -a cleanable_physical_leaves=()
-    local -a cleanable_leaf_labels=()
+    if [[ -d "$cache_root/Default/Partitions" ]]; then
+        local partition_dir
+        for partition_dir in "$cache_root/Default/Partitions"/*; do
+            [[ -d "$partition_dir" && ! -L "$partition_dir" ]] || continue
+            profiles+=("$partition_dir")
+        done
+    else
+        profiles+=("$cache_root/Default/Partitions/codex-browser-app")
+    fi
+    # Every profile and partition shares one row, so a Mac with many MCP
+    # sandboxes still reads as one Codex Desktop line, not one per partition.
+    local -a cache_targets=()
     local profile leaf physical_leaf
     for profile in "${profiles[@]}"; do
-        for leaf in "${leaves[@]}"; do
+        for leaf in "Cache" "Code Cache"; do
             physical_leaf=""
             if physical_leaf=$(codex_staging_physical_path "$profile/$leaf" "$cache_root" any); then
                 if mole_cleanup_targets_exist "$physical_leaf"/*; then
-                    cleanable_physical_leaves+=("$physical_leaf")
-                    cleanable_leaf_labels+=("$leaf")
+                    cache_targets+=("$physical_leaf"/*)
                 fi
             else
                 debug_log "Codex Desktop cache leaf skipped: $profile/$leaf"
             fi
         done
     done
-    [[ ${#cleanable_physical_leaves[@]} -gt 0 ]] || return 0
+    [[ ${#cache_targets[@]} -gt 0 ]] || return 0
 
     local process_state=0
     codex_desktop_process_state || process_state=$?
@@ -4716,15 +4780,10 @@ clean_codex_desktop_caches() {
         return 0
     fi
 
-    local cleanable_index
-    for ((cleanable_index = 0; cleanable_index < ${#cleanable_physical_leaves[@]}; cleanable_index++)); do
-        physical_leaf="${cleanable_physical_leaves[$cleanable_index]}"
-        leaf="${cleanable_leaf_labels[$cleanable_index]}"
-        _codex_desktop_safe_clean_guarded \
-            "Codex Desktop caches" \
-            "$physical_leaf"/* \
-            "Codex Desktop $leaf" || return 0
-    done
+    _codex_desktop_safe_clean_guarded \
+        "Codex Desktop caches" \
+        "${cache_targets[@]}" \
+        "Codex Desktop cache" || return 0
 }
 
 codex_sparkle_updater_running() {
@@ -5488,7 +5547,7 @@ clean_codex_crashpad_pending() {
         remove_rc=1
         if [[ "$dry_run_mode" == "true" ]]; then
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$file_path" "$file_size_kb" 1 true || continue
+                mole_record_user_sink_dry_run_target "$file_path" "$file_size_kb" 1 true || continue
             fi
             MOLE_DRY_RUN=1 safe_remove "$file_path" true "$file_size_kb" && remove_rc=0
         elif safe_remove "$file_path" true "$file_size_kb"; then
@@ -6281,17 +6340,18 @@ clean_agent_browser_old_chrome() {
 clean_dev_misc() {
     safe_clean ~/Library/Caches/com.unity3d.*/* "Unity cache"
     safe_clean ~/Library/Caches/com.mongodb.compass/* "MongoDB Compass cache"
-    safe_clean ~/Library/Caches/com.figma.Desktop/* "Figma cache"
     safe_clean ~/Library/Caches/com.github.GitHubDesktop/* "GitHub Desktop cache"
     safe_clean ~/Library/Caches/SentryCrash/* "Sentry crash reports"
     safe_clean ~/Library/Caches/KSCrash/* "KSCrash reports"
     safe_clean ~/Library/Caches/com.crashlytics.data/* "Crashlytics data"
     if [[ -d ~/Library/Application\ Support/Antigravity ]]; then
-        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/Cache/* "Antigravity cache"
-        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/Code\ Cache/* "Antigravity code cache"
-        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/GPUCache/* "Antigravity GPU cache"
-        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/DawnGraphiteCache/* "Antigravity Dawn cache"
-        mole_safe_clean_app_cache "Antigravity" ~/Library/Application\ Support/Antigravity/DawnWebGPUCache/* "Antigravity WebGPU cache"
+        mole_safe_clean_app_cache "Antigravity" \
+            ~/Library/Application\ Support/Antigravity/Cache/* \
+            ~/Library/Application\ Support/Antigravity/Code\ Cache/* \
+            ~/Library/Application\ Support/Antigravity/GPUCache/* \
+            ~/Library/Application\ Support/Antigravity/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/Antigravity/DawnWebGPUCache/* \
+            "Antigravity cache"
     fi
     # Antigravity browser profile caches (~/.gemini)
     clean_antigravity_caches
@@ -6299,31 +6359,37 @@ clean_dev_misc() {
     clean_agent_browser_old_chrome
     # Filo (Electron)
     if [[ -d ~/Library/Application\ Support/Filo ]]; then
-        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/Cache/* "Filo cache"
-        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/Code\ Cache/* "Filo code cache"
-        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/GPUCache/* "Filo GPU cache"
-        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/DawnGraphiteCache/* "Filo Dawn cache"
-        mole_safe_clean_app_cache "Filo" ~/Library/Application\ Support/Filo/production/DawnWebGPUCache/* "Filo WebGPU cache"
+        mole_safe_clean_app_cache "Filo" \
+            ~/Library/Application\ Support/Filo/production/Cache/* \
+            ~/Library/Application\ Support/Filo/production/Code\ Cache/* \
+            ~/Library/Application\ Support/Filo/production/GPUCache/* \
+            ~/Library/Application\ Support/Filo/production/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/Filo/production/DawnWebGPUCache/* \
+            "Filo cache"
     fi
     # Claude (Electron)
     if [[ -d ~/Library/Application\ Support/Claude ]]; then
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/Cache/* "Claude cache"
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/Code\ Cache/* "Claude code cache"
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/GPUCache/* "Claude GPU cache"
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/DawnGraphiteCache/* "Claude Dawn cache"
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/DawnWebGPUCache/* "Claude WebGPU cache"
-        mole_safe_clean_app_cache "Claude" ~/Library/Application\ Support/Claude/sentry/* "Claude sentry cache"
+        mole_safe_clean_app_cache "Claude" \
+            ~/Library/Application\ Support/Claude/Cache/* \
+            ~/Library/Application\ Support/Claude/Code\ Cache/* \
+            ~/Library/Application\ Support/Claude/GPUCache/* \
+            ~/Library/Application\ Support/Claude/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/Claude/DawnWebGPUCache/* \
+            ~/Library/Application\ Support/Claude/sentry/* \
+            "Claude cache"
     fi
     # Qoder (VS Code fork, Electron)
     if [[ -d ~/Library/Application\ Support/Qoder ]]; then
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/Cache/* "Qoder cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/CachedData/* "Qoder cached data"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/CachedExtensionVSIXs/* "Qoder extension cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/Code\ Cache/* "Qoder code cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/GPUCache/* "Qoder GPU cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/DawnGraphiteCache/* "Qoder Dawn cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/DawnWebGPUCache/* "Qoder WebGPU cache"
-        mole_safe_clean_app_cache "Qoder" ~/Library/Application\ Support/Qoder/logs/* "Qoder logs"
+        mole_safe_clean_app_cache "Qoder" \
+            ~/Library/Application\ Support/Qoder/Cache/* \
+            ~/Library/Application\ Support/Qoder/CachedData/* \
+            ~/Library/Application\ Support/Qoder/CachedExtensionVSIXs/* \
+            ~/Library/Application\ Support/Qoder/Code\ Cache/* \
+            ~/Library/Application\ Support/Qoder/GPUCache/* \
+            ~/Library/Application\ Support/Qoder/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/Qoder/DawnWebGPUCache/* \
+            ~/Library/Application\ Support/Qoder/logs/* \
+            "Qoder cache"
     fi
     # Prisma ORM engine binaries cache
     safe_clean ~/.cache/prisma/* "Prisma cache"
@@ -6352,9 +6418,17 @@ clean_dev_misc() {
     # Cursor Agent session logs (versions cleaned separately in clean_dev_ai_agents)
     if [[ -d "$HOME/.local/share/cursor-agent" ]]; then
         local cursor_logs_rc=0
-        safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f" || cursor_logs_rc=$?
+        safe_find_delete "$HOME/.local/share/cursor-agent" "*.log" "$MOLE_LOG_AGE_DAYS" "f" "Cursor Agent logs" || cursor_logs_rc=$?
         if mole_rc_signal "$cursor_logs_rc"; then
             return "$cursor_logs_rc"
+        fi
+    fi
+    local cursor_worker_dir="$HOME/Library/Application Support/Cursor/User/globalStorage/anysphere.cursor-agent-worker"
+    if [[ -d "$cursor_worker_dir" && ! -L "$cursor_worker_dir" ]]; then
+        local cursor_worker_logs_rc=0
+        safe_find_delete "$cursor_worker_dir" "cursor-agent-worker-*.log" "$MOLE_LOG_AGE_DAYS" "f" "Cursor Agent worker logs" || cursor_worker_logs_rc=$?
+        if mole_rc_signal "$cursor_worker_logs_rc"; then
+            return "$cursor_worker_logs_rc"
         fi
     fi
     # Playwright browser revisions are hard-protected by should_protect_path,
@@ -6373,7 +6447,18 @@ clean_dev_misc() {
 clean_dev_shell() {
     # Git owns its transaction lock; config and history backups can be the
     # only remaining copy of user state. Neither is an automatic cache target.
-    safe_clean ~/.oh-my-zsh/cache/* "Oh My Zsh cache"
+    # completions/ is on fpath: an open shell autoloads _gh or _docker from it
+    # on the first Tab, so removing it breaks completion there (#2110).
+    local omz_entry
+    local -a omz_targets=()
+    for omz_entry in "$HOME/.oh-my-zsh/cache"/*; do
+        [[ -e "$omz_entry" || -L "$omz_entry" ]] || continue
+        [[ "${omz_entry##*/}" == "completions" ]] && continue
+        omz_targets+=("$omz_entry")
+    done
+    if [[ ${#omz_targets[@]} -gt 0 ]]; then
+        safe_clean "${omz_targets[@]}" "Oh My Zsh cache"
+    fi
     safe_clean ~/.cache/pre-commit/* "pre-commit cache"
 }
 # Network tool caches.
@@ -6466,6 +6551,7 @@ clean_developer_tools() {
 
     # GUI developer applications
     _run_developer_cleanup_step --strict clean_xcode_tools || return $?
+    _run_developer_cleanup_step clean_instruments_unsaved_traces || return $?
     _run_developer_cleanup_step clean_code_editors || return $?
 
     # Homebrew: only blanket-clean downloads/. Wiping api/ (JSON that needs a

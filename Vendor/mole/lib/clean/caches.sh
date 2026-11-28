@@ -79,6 +79,13 @@ clean_service_worker_cache() {
     local delete_guard="${3:-}"
     local deadline_seconds="${4:-}"
     [[ ! -d "$cache_path" ]] && return 0
+    # A running Chromium browser holds this store; its SingletonLock sits one
+    # to three folders up (Google/Chrome, Arc/User Data). Asked again before
+    # each removal below, in a dry run too.
+    if app_support_path_held_by_singleton "$cache_path"; then
+        debug_log "Keeping $browser_name Service Worker cache, its owner is running: $cache_path"
+        return 0
+    fi
 
     # A lexical CacheStorage path below Application Support is not enough
     # authority for recursive deletion. Refuse a root reached through any
@@ -177,6 +184,10 @@ clean_service_worker_cache() {
                 guard_stopped=true
                 break
             fi
+            if app_support_path_held_by_singleton "$cache_path"; then
+                debug_log "Keeping $browser_name Service Worker cache, its owner started: $cache_path"
+                break
+            fi
             if ! _mole_path_matches_identity \
                 "$cache_dir" "$expected_parent" "$expected_parent_id" \
                 "$expected_target_id"; then
@@ -185,7 +196,7 @@ clean_service_worker_cache() {
             fi
             if [[ "$DRY_RUN" == "true" ]]; then
                 if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                    record_dry_run_cleanup_target "$cache_dir" "$size" 1 true || continue
+                    mole_record_user_sink_dry_run_target "$cache_dir" "$size" 1 true || continue
                 fi
             else
                 local remove_rc=0
@@ -1033,7 +1044,7 @@ clean_python_bytecode_cache_group() {
         [[ $guard_rc -eq 0 ]] || continue
         if [[ "$DRY_RUN" == "true" ]]; then
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$cache_dir" "$size_kb" 1 true || continue
+                mole_record_user_sink_dry_run_target "$cache_dir" "$size_kb" 1 true || continue
             elif declare -f register_dry_run_cleanup_target > /dev/null 2>&1; then
                 register_dry_run_cleanup_target "$cache_dir" || continue
             fi

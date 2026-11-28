@@ -900,6 +900,48 @@ _mole_container_cache_has_open_handle() {
     return 1
 }
 
+# Chromium and Electron apps hold <userData>/SingletonLock, a link to
+# "<host>-<pid>", while they run and remove it when they quit, so a live pid
+# means the Code Cache and GPUCache beside it are in use (Docker Desktop,
+# VS Code, T3 Code). Returns 0 while the app runs or the lock cannot be read,
+# 1 when there is no lock or its pid is gone. Lives here, not in a clean
+# module, because both the Application Support sweep and the Service Worker
+# cleaner ask it.
+app_support_dir_in_use() {
+    local lock="$1/SingletonLock"
+    [[ -L "$lock" ]] || return 1
+    local target="" pid=""
+    target=$(readlink "$lock" 2> /dev/null) || return 0
+    pid="${target##*-}"
+    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 0
+    kill -0 "$pid" 2> /dev/null && return 0
+    # kill -0 also fails for a live process another user owns.
+    ps -p "$pid" > /dev/null 2>&1 && return 0
+    return 1
+}
+
+# A Chromium user-data root sits one to three folders below Application
+# Support (Vivaldi, Google/Chrome, Arc/User Data). Returns 0 while a
+# SingletonLock in any of those folders along the path names a live pid or
+# cannot be read, so a browser's own stores are left alone while it runs
+# (Mole Mac ProcessGuard.singletonLockOwner). Paths elsewhere return 1.
+app_support_path_held_by_singleton() {
+    local support="$HOME/Library/Application Support"
+    local rest="${1%/}"
+    case "$rest" in
+        "$support"/?*) rest="${rest#"$support"/}" ;;
+        *) return 1 ;;
+    esac
+    local folder="$support" depth
+    for depth in 1 2 3; do
+        folder="$folder/${rest%%/*}"
+        app_support_dir_in_use "$folder" && return 0
+        [[ "$rest" == */* ]] || break
+        rest="${rest#*/}"
+    done
+    return 1
+}
+
 # Return 0 when deletion must be refused (live owner or open cache handle).
 _mole_should_refuse_live_user_cache_path() {
     local path="$1"
@@ -1475,6 +1517,43 @@ _mole_note_clean_cancel_source() {
 }
 
 # Safe wrapper around rm -rf with validation
+# This sink is a plain rm as the invoking user. An item another user owns
+# (root's leftovers from `sudo gem`, `sudo npm`, `sudo bundle`) fails there
+# unless this user can still unlink it: its folder is writable and not sticky,
+# and a folder item is itself writable. safe_remove asks before its dry-run
+# return and _safe_clean_impl before recording its preview, so a row the run
+# would refuse on every clean is never listed (Mole Mac
+# CacheScanner.userSinkRefusesOnOwnership). Never ask it for a sudo sink,
+# which removes root-owned items itself.
+# A link is unlinked in its folder whoever owns it, so it is never refused here.
+_mole_path_owned_by_current_user() {
+    [[ -O "$1" ]]
+}
+
+_mole_user_sink_refuses_on_ownership() {
+    local path="$1"
+    [[ ${EUID:-0} -ne 0 ]] || return 1
+    [[ -e "$path" && ! -L "$path" ]] || return 1
+    _mole_path_owned_by_current_user "$path" && return 1
+    local parent="${path%/*}"
+    [[ -n "$parent" ]] || parent=/
+    [[ -d "$parent" && -w "$parent" && ! -k "$parent" ]] || return 0
+    [[ ! -d "$path" || -w "$path" ]] || return 0
+    return 1
+}
+
+# The preview half of a user-level cleaner that records its own rows and then
+# removes through safe_remove: an item safe_remove would refuse on ownership is
+# not listed, so the preview matches the run. Sudo sinks keep calling
+# record_dry_run_cleanup_target directly, which still lists root-owned rows.
+mole_record_user_sink_dry_run_target() {
+    if _mole_user_sink_refuses_on_ownership "$1"; then
+        debug_log "Preview left out an item another user owns: $1"
+        return 1
+    fi
+    record_dry_run_cleanup_target "$@"
+}
+
 safe_remove() {
     local path="$1"
     local silent="${2:-false}"
@@ -1543,6 +1622,13 @@ safe_remove() {
     # Check if path exists
     if [[ ! -e "$path" ]]; then
         return 0
+    fi
+
+    # Before the dry-run return, so a preview never lists what the run refuses.
+    if _mole_user_sink_refuses_on_ownership "$path"; then
+        debug_log "Skipped removal of an item another user owns: $path"
+        log_operation "${MOLE_CURRENT_COMMAND:-clean}" "SKIPPED" "$path" "owned by another user"
+        return 1
     fi
 
     # Keep preview eligibility identical to real cleanup. This first check
@@ -3465,12 +3551,16 @@ _mole_delete_log() {
 # Safe Find and Delete Operations
 # ============================================================================
 
-# Safe file discovery and deletion with depth and age limits
+# Safe file discovery and deletion with depth and age limits. With a label,
+# the completed matches go through safe_clean, so the preview and a real run
+# both show one row and count it in the total. Without one no row is shown,
+# the preview still counts the matches and a real run does not.
 safe_find_delete() {
     local base_dir="$1"
     local pattern="$2"
     local age_days="${3:-7}"
     local type_filter="${4:-f}"
+    local label="${5:-}"
 
     local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
     if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" ]] && mole_rc_timeout_or_signal "$pending_clean_cancel"; then
@@ -3524,6 +3614,17 @@ safe_find_delete() {
 
     # Iterate only a completed result set so a timeout cannot authorize
     # deletion of the partial prefix.
+    if [[ -n "$label" ]] && declare -f safe_clean > /dev/null 2>&1; then
+        local -a labeled_matches=()
+        while IFS= read -r -d '' match; do
+            labeled_matches+=("$match")
+        done < "$scan_file"
+        rm -f -- "$scan_file" 2> /dev/null || true # SAFE: exact tracked temp file created above
+        [[ ${#labeled_matches[@]} -gt 0 ]] || return 0
+        local labeled_rc=0
+        safe_clean "${labeled_matches[@]}" "$label" || labeled_rc=$?
+        return "$labeled_rc"
+    fi
     # Per-caller whitelist gates were missed in past releases (see #710, #724,
     # #738, #744, #757); enforcing here makes the protection structural so
     # new clean_* functions get whitelist enforcement for free.
@@ -3546,7 +3647,7 @@ safe_find_delete() {
             [[ $match_size_rc -eq 0 ]] || match_size_kb=0
             [[ "$match_size_kb" =~ ^[0-9]+$ ]] || match_size_kb=0
             local preview_rc=0
-            record_dry_run_cleanup_target "$match" "$match_size_kb" 1 true || preview_rc=$?
+            mole_record_user_sink_dry_run_target "$match" "$match_size_kb" 1 true || preview_rc=$?
             if [[ $preview_rc -ge 128 ]]; then
                 delete_rc=$preview_rc
                 break
@@ -3620,6 +3721,10 @@ safe_sudo_find_delete() {
     # cleanup. It is reset for every invocation and updated only for confirmed
     # removals or accepted dry-run previews.
     MOLE_SAFE_SUDO_FIND_DELETE_COUNT=0
+    # The KB of those same matches, on the allocated-block basis get_path_size_kb
+    # uses for a file, so a caller that prints a row can add it to the run total.
+    # A real-run directory match (no caller passes d) adds its count only.
+    MOLE_SAFE_SUDO_FIND_DELETE_KB=0
 
     local pending_clean_cancel="${MOLE_CLEAN_CANCEL_STATUS:-0}"
     if [[ "${MOLE_CURRENT_COMMAND:-}" == "clean" ]] && mole_rc_timeout_or_signal "$pending_clean_cancel"; then
@@ -3832,10 +3937,12 @@ safe_sudo_find_delete() {
     # and preview output stay unchanged.
     local -a batch_files=()
     local -a batch_identities=()
+    local -a batch_sizes_kb=()
     local max_batch_items=""
     max_batch_items=$(_mole_privileged_batch_max_items)
     [[ "$max_batch_items" =~ ^[1-9][0-9]*$ ]] || max_batch_items=4096
     local removed_count=0
+    local removed_kb=0
     local delete_rc=0
     local deadline_reached=false
     local batch_aborted=false
@@ -3874,9 +3981,21 @@ safe_sudo_find_delete() {
             # they have no unprivileged identity to fall back to.
             if [[ ${EUID:-0} -ne 0 ]]; then
                 local mutable_rc=0
+                local mutable_blocks=""
+                if [[ "$type_filter" == "f" ]]; then
+                    local mutable_size_rc=0
+                    mutable_blocks=$("$STAT_BSD" -f%b "$match" 2> /dev/null) || mutable_size_rc=$?
+                    if [[ $mutable_size_rc -ge 128 ]]; then
+                        delete_rc=$mutable_size_rc
+                        break
+                    fi
+                fi
                 safe_remove "$match" true "" "$deadline_seconds" || mutable_rc=$?
                 if [[ $mutable_rc -eq 0 ]]; then
                     removed_count=$((removed_count + 1))
+                    if [[ "$mutable_blocks" =~ ^[0-9]+$ ]]; then
+                        removed_kb=$((removed_kb + (mutable_blocks + 1) / 2))
+                    fi
                 elif mole_rc_timeout_or_signal "$mutable_rc"; then
                     delete_rc=$mutable_rc
                     break
@@ -3918,6 +4037,7 @@ safe_sudo_find_delete() {
             fi
             if [[ $preview_rc -eq 0 ]]; then
                 removed_count=$((removed_count + 1))
+                removed_kb=$((removed_kb + match_size_kb))
             fi
             continue
         fi
@@ -3926,12 +4046,17 @@ safe_sudo_find_delete() {
         if [[ "$type_filter" == "f" && "${MOLE_DRY_RUN:-0}" != "1" && ! -L "$match" ]]; then
             local identity_timeout=""
             local match_identity=""
+            local match_blocks=""
             local identity_rc=0
             identity_timeout=$(_mole_timeout_with_deadline "$MOLE_TIMEOUT_QUICK_DETECT_SEC" \
                 "$deadline_seconds") || identity_rc=$?
             if [[ $identity_rc -eq 0 ]]; then
+                # The same stat also reads the allocated blocks the batch
+                # reports as removed once the worker confirms this file.
                 match_identity=$(_mole_bounded_sudo "$identity_timeout" \
-                    -n "$STAT_BSD" -f%d:%i:%m "$match" < /dev/null 2> /dev/null) || identity_rc=$?
+                    -n "$STAT_BSD" -f'%d:%i:%m %b' "$match" < /dev/null 2> /dev/null) || identity_rc=$?
+                match_blocks="${match_identity##* }"
+                match_identity="${match_identity% *}"
             fi
             if mole_rc_timeout_or_signal "$identity_rc"; then
                 delete_rc=$identity_rc
@@ -3944,8 +4069,10 @@ safe_sudo_find_delete() {
                     batch_aborted=true
                     break
                 fi
+                [[ "$match_blocks" =~ ^[0-9]+$ ]] || match_blocks=0
                 batch_files+=("$match")
                 batch_identities+=("$match_identity")
+                batch_sizes_kb+=("$(((match_blocks + 1) / 2))")
             elif [[ $delete_rc -eq 0 ]]; then
                 delete_rc=${identity_rc:-1}
                 [[ $delete_rc -ne 0 ]] || delete_rc=1
@@ -4025,10 +4152,21 @@ safe_sudo_find_delete() {
                 operation_log_command batch_command "${MOLE_CURRENT_COMMAND:-clean}"
             fi
             local batch_ack_count=0
+            local batch_ack_index=0
             local -a removed_lines=()
             local batch_file=""
             while IFS= read -r -d '' batch_file; do
                 batch_ack_count=$((batch_ack_count + 1))
+                # The worker confirms files in batch order and skips the ones
+                # whose identity changed, so walk forward to this one's size.
+                while [[ $batch_ack_index -lt ${#batch_files[@]} &&
+                    "${batch_files[$batch_ack_index]}" != "$batch_file" ]]; do
+                    batch_ack_index=$((batch_ack_index + 1))
+                done
+                if [[ $batch_ack_index -lt ${#batch_files[@]} ]]; then
+                    removed_kb=$((removed_kb + batch_sizes_kb[batch_ack_index]))
+                    batch_ack_index=$((batch_ack_index + 1))
+                fi
                 if [[ -n "$batch_ts" ]]; then
                     removed_lines+=("[$batch_ts] [$batch_command] REMOVED $batch_file (batch)")
                 fi
@@ -4052,6 +4190,7 @@ safe_sudo_find_delete() {
     fi
 
     MOLE_SAFE_SUDO_FIND_DELETE_COUNT=$removed_count
+    MOLE_SAFE_SUDO_FIND_DELETE_KB=$removed_kb
 
     [[ $delete_rc -lt 128 ]] || _mole_record_clean_cancellation "$delete_rc"
     if [[ $restore_errexit -eq 1 ]]; then

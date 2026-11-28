@@ -71,8 +71,16 @@ if [[ -z "${MO_TIMEOUT_INITIALIZED:-}" ]]; then
     done
     unset candidate candidate_path
 
-    if command -v perl > /dev/null 2>&1; then
+    # The system perl first: a PATH perl can be a plenv, asdf or perlbrew
+    # shim that exits 127 with no version selected, and the perl backend would
+    # then fail the command without ever starting it. run_with_interruptible_timeout
+    # always takes this backend, so `mo update` through Homebrew depends on it.
+    if [[ -x /usr/bin/perl ]]; then
+        MO_TIMEOUT_PERL_BIN="/usr/bin/perl"
+    elif command -v perl > /dev/null 2>&1; then
         MO_TIMEOUT_PERL_BIN="$(command -v perl)"
+    fi
+    if [[ -n "$MO_TIMEOUT_PERL_BIN" ]]; then
         if [[ -z "$MO_TIMEOUT_BIN" ]] && [[ "${MO_DEBUG:-0}" == "1" ]]; then
             echo "[TIMEOUT] Using perl fallback: $MO_TIMEOUT_PERL_BIN" >&2
         fi
@@ -229,7 +237,8 @@ run_with_timeout() {
     # either routing every non-TTY run through perl, which is every CI run and
     # every piped run, or backgrounding the backend and polling it, which
     # reopens the terminal-handoff class behind #1222/#1218. Neither is worth a
-    # window the deadline already bounds.
+    # window the deadline already bounds. A long command the user may cancel
+    # uses run_with_interruptible_timeout below instead (#2121).
     if [[ -n "${MO_TIMEOUT_BIN:-}" ]]; then
         local timeout_bin="$MO_TIMEOUT_BIN"
         if [[ "$timeout_bin" != */* ]]; then
@@ -517,4 +526,16 @@ run_with_timeout() {
 
     # Command completed normally (or with its own error)
     return "$exit_code"
+}
+
+# A long command the user watches and may cancel, such as brew update and brew
+# upgrade in `mo update`. The timeout binaries put the command in a process
+# group of their own, so Ctrl-C reaches neither and the caller's INT trap waits
+# out the whole budget (#2121: 14 s of a 15 s budget measured, and mo update
+# runs two 120 s brew steps). With the binary cleared, run_with_timeout takes
+# the perl backend, which hands the terminal to the command or stops it on
+# INT, or else the shell fallback, which also stops it. Short probes keep the
+# binary for the reasons given above run_with_timeout.
+run_with_interruptible_timeout() {
+    MO_TIMEOUT_BIN="" run_with_timeout "$@"
 }

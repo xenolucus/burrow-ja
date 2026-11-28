@@ -298,7 +298,7 @@ clean_xcode_derived_data() {
                 break
             fi
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$dir" "$dir_size_kb" 1 "$size_known" || continue
+                mole_record_user_sink_dry_run_target "$dir" "$dir_size_kb" 1 "$size_known" || continue
             fi
             size_kb=$((size_kb + dir_size_kb))
             dry_run_count=$((dry_run_count + 1))
@@ -620,18 +620,24 @@ _codebuddy_shared_cache_running() {
 
 # Code editors.
 clean_code_editors() {
-    mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/logs/* "VS Code logs"
-    mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/Cache/* "VS Code cache"
-    mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/CachedExtensionVSIXs/* "VS Code extension cache"
-    mole_safe_clean_app_cache "Cursor" ~/Library/Application\ Support/Cursor/CachedExtensionVSIXs/* "Cursor extension cache"
-    mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/CachedData/* "VS Code data cache"
-    mole_safe_clean_app_cache "Visual Studio Code" ~/Library/Application\ Support/Code/WebStorage/*/CacheStorage/* "VS Code webview cache"
+    # Each Electron editor's cache and log folders go through one call, so a
+    # well-used editor reads as one line, not nine. Every item is still
+    # rechecked before removal, and a running owner stops the whole app.
+    mole_safe_clean_app_cache "Visual Studio Code" \
+        ~/Library/Application\ Support/Code/logs/* \
+        ~/Library/Application\ Support/Code/Cache/* \
+        ~/Library/Application\ Support/Code/CachedExtensionVSIXs/* \
+        ~/Library/Application\ Support/Code/CachedData/* \
+        ~/Library/Application\ Support/Code/WebStorage/*/CacheStorage/* \
+        "VS Code cache"
     safe_clean ~/Library/Caches/com.sublimetext.*/* "Sublime Text cache"
     safe_clean ~/Library/Caches/Zed/* "Zed cache"
     # Zed npm caches: node/cache (system-node scratch) and node/node-v*/cache
     # (per-version managed runtime, see #88); keep editor state under db/ untouched.
-    mole_safe_clean_app_cache "Zed" ~/Library/Application\ Support/Zed/node/cache/* "Zed npm cache"
-    mole_safe_clean_app_cache "Zed" ~/Library/Application\ Support/Zed/node/node-v*/cache/* "Zed npm cache"
+    mole_safe_clean_app_cache "Zed" \
+        ~/Library/Application\ Support/Zed/node/cache/* \
+        ~/Library/Application\ Support/Zed/node/node-v*/cache/* \
+        "Zed npm cache"
     safe_clean ~/Library/Logs/Zed/* "Zed logs"
     clean_editor_obsolete_extensions
     # Shared desktop extension caches have more than one possible owner.
@@ -647,14 +653,30 @@ clean_code_editors() {
     fi
     # CodeBuddy CN (VS Code fork, Electron)
     if [[ -d ~/Library/Application\ Support/CodeBuddy\ CN ]]; then
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/Cache/* "CodeBuddy CN cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/CachedData/* "CodeBuddy CN cached data"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/CachedExtensionVSIXs/* "CodeBuddy CN extension cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/Code\ Cache/* "CodeBuddy CN code cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/GPUCache/* "CodeBuddy CN GPU cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/DawnGraphiteCache/* "CodeBuddy CN Dawn cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/DawnWebGPUCache/* "CodeBuddy CN WebGPU cache"
-        mole_safe_clean_app_cache "CodeBuddy CN" ~/Library/Application\ Support/CodeBuddy\ CN/logs/* "CodeBuddy CN logs"
+        mole_safe_clean_app_cache "CodeBuddy CN" \
+            ~/Library/Application\ Support/CodeBuddy\ CN/Cache/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/CachedData/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/CachedExtensionVSIXs/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/Code\ Cache/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/GPUCache/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/DawnWebGPUCache/* \
+            ~/Library/Application\ Support/CodeBuddy\ CN/logs/* \
+            "CodeBuddy CN cache"
+    fi
+    # Cursor (VS Code fork, Electron)
+    if [[ -d ~/Library/Application\ Support/Cursor ]]; then
+        mole_safe_clean_app_cache "Cursor" \
+            ~/Library/Application\ Support/Cursor/Cache/* \
+            ~/Library/Application\ Support/Cursor/CachedData/* \
+            ~/Library/Application\ Support/Cursor/CachedExtensionVSIXs/* \
+            ~/Library/Application\ Support/Cursor/Code\ Cache/* \
+            ~/Library/Application\ Support/Cursor/GPUCache/* \
+            ~/Library/Application\ Support/Cursor/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/Cursor/DawnWebGPUCache/* \
+            ~/Library/Application\ Support/Cursor/logs/* \
+            ~/Library/Application\ Support/Cursor/WebStorage/*/CacheStorage/* \
+            "Cursor cache"
     fi
 }
 # Lark / Feishu desktop embeds a Chromium webview (the "aha" explorer profile)
@@ -846,6 +868,49 @@ clean_notion_service_worker_caches() {
         fi
         [[ $guarded_rc -eq 0 ]] || return "$guarded_rc"
     done
+}
+
+clean_notion_partition_disk_caches() {
+    local partitions_root="$HOME/Library/Application Support/Notion/Partitions"
+    [[ -d "$partitions_root" ]] || return 0
+    local physical_root
+    physical_root=$(cd -P "$partitions_root" 2> /dev/null && pwd -P) || return 0
+    if [[ "$physical_root" != "$partitions_root" ]]; then
+        debug_log "Refusing symlinked Notion partitions root: $partitions_root -> $physical_root"
+        return 0
+    fi
+
+    local -a cache_targets=()
+    local _partition _leaf candidate physical_leaf
+    for _partition in "$partitions_root"/*; do
+        [[ -d "$_partition" && ! -L "$_partition" ]] || continue
+        for _leaf in "Cache" "Code Cache"; do
+            candidate="${_partition%/}/$_leaf"
+            [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+            physical_leaf=$(cd -P "$candidate" 2> /dev/null && pwd -P) || continue
+            if [[ "$physical_leaf" != "$candidate" ]]; then
+                debug_log "Refusing symlinked Notion partition cache leaf: $candidate -> $physical_leaf"
+                continue
+            fi
+            if mole_cleanup_targets_exist "$physical_leaf"/*; then
+                cache_targets+=("$physical_leaf"/*)
+            fi
+        done
+    done
+    [[ ${#cache_targets[@]} -gt 0 ]] || return 0
+
+    local _MOLE_CLEAN_GUARD_REASON=""
+    if ! _notion_service_worker_delete_guard_allows; then
+        mole_report_guard_stop "Notion" \
+            mole_defer_cleanup_family "Notion"
+        return 0
+    fi
+
+    # Ask once more inside safe_remove, as every named Application Support
+    # cache does: Notion can open while one item is being validated.
+    local _MOLE_SAFE_REMOVE_FINAL_GUARD=_notion_service_worker_delete_guard_allows
+    _app_cache_safe_clean_guarded _notion_service_worker_delete_guard_allows "Notion" \
+        "${cache_targets[@]}" "Notion web cache"
 }
 # WeChat and WeCom ship sandboxed, so their regenerable caches live under
 # ~/Library/Containers/<bundle id>/Data/ and the ~/Library/Caches/<bundle id>
@@ -1107,8 +1172,10 @@ clean_communication_apps() {
     mole_safe_clean_app_cache "Discord" ~/Library/Application\ Support/discord/Cache/* "Discord cache"
     mole_safe_clean_app_cache "Legcord" ~/Library/Application\ Support/legcord/Cache/* "Legcord cache"
     # Vesktop moves Electron's session data to sessionData; its vencordFiles sibling stays.
-    mole_safe_clean_app_cache "Vesktop" ~/Library/Application\ Support/vesktop/sessionData/Cache/* "Vesktop cache"
-    mole_safe_clean_app_cache "Vesktop" ~/Library/Application\ Support/vesktop/sessionData/Code\ Cache/* "Vesktop code cache"
+    mole_safe_clean_app_cache "Vesktop" \
+        ~/Library/Application\ Support/vesktop/sessionData/Cache/* \
+        ~/Library/Application\ Support/vesktop/sessionData/Code\ Cache/* \
+        "Vesktop cache"
     mole_safe_clean_app_cache "Slack" ~/Library/Application\ Support/Slack/Cache/* "Slack cache"
     safe_clean ~/Library/Caches/us.zoom.xos/* "Zoom cache"
     safe_clean ~/Library/Caches/com.tencent.xinWeChat/* "WeChat cache"
@@ -1128,13 +1195,16 @@ clean_communication_apps() {
         "$HOME/Library/Containers/com.bytedance.macos.feishu/Data/Library/Caches" "Feishu cache"
     clean_feishu_service_worker_caches
     clean_notion_service_worker_caches
+    clean_notion_partition_disk_caches
     if [[ -d ~/Library/Application\ Support/Microsoft/Teams ]]; then
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/Cache/* "Microsoft Teams legacy cache"
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/Application\ Cache/* "Microsoft Teams legacy application cache"
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/Code\ Cache/* "Microsoft Teams legacy code cache"
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/GPUCache/* "Microsoft Teams legacy GPU cache"
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/logs/* "Microsoft Teams legacy logs"
-        mole_safe_clean_app_cache "Microsoft Teams" ~/Library/Application\ Support/Microsoft/Teams/tmp/* "Microsoft Teams legacy temp files"
+        mole_safe_clean_app_cache "Microsoft Teams" \
+            ~/Library/Application\ Support/Microsoft/Teams/Cache/* \
+            ~/Library/Application\ Support/Microsoft/Teams/Application\ Cache/* \
+            ~/Library/Application\ Support/Microsoft/Teams/Code\ Cache/* \
+            ~/Library/Application\ Support/Microsoft/Teams/GPUCache/* \
+            ~/Library/Application\ Support/Microsoft/Teams/logs/* \
+            ~/Library/Application\ Support/Microsoft/Teams/tmp/* \
+            "Microsoft Teams legacy cache"
     fi
     clean_wechat_container_caches
 }
@@ -1184,6 +1254,49 @@ _adobe_app_running() {
         -f '^/Applications/Adobe [^/]+(/Adobe [^/]+)?[.]app/Contents/MacOS/'
 }
 
+# Figma Desktop (Electron) stores its Chromium web, shader, and V8 bytecode
+# caches under ~/Library/Application Support/Figma/DesktopProfile/v*/.
+# Modern macOS versions no longer store substantial caches in
+# ~/Library/Caches/com.figma.Desktop, leaving hundreds of megabytes of
+# regenerable cache uncollected. Preserve durable state (Cookies, Local Storage,
+# Preferences, settings.json) and guard deletion while Figma is running.
+clean_figma_desktop_caches() {
+    # One row for every Figma cache, including the agent's and each profile's.
+    local -a cache_targets=(
+        "$HOME/Library/Caches/com.figma.Desktop"/*
+        "$HOME/Library/Caches/com.figma.agent"/*
+    )
+    local desktop_profile_root="$HOME/Library/Application Support/Figma/DesktopProfile"
+    local physical_root=""
+    if [[ -d "$desktop_profile_root" ]]; then
+        physical_root=$(cd -P "$desktop_profile_root" 2> /dev/null && pwd -P) || physical_root=""
+        if [[ -n "$physical_root" && "$physical_root" != "$desktop_profile_root" ]]; then
+            debug_log "Refusing symlinked Figma profile root: $desktop_profile_root -> $physical_root"
+            physical_root=""
+        fi
+    fi
+
+    local profile candidate physical_leaf leaf
+    if [[ -n "$physical_root" ]]; then
+        for profile in "$desktop_profile_root"/*; do
+            [[ -d "$profile" && ! -L "$profile" ]] || continue
+            for leaf in "Cache" "Code Cache" "GPUCache" "DawnGraphiteCache" "DawnWebGPUCache"; do
+                candidate="${profile%/}/$leaf"
+                [[ -d "$candidate" && ! -L "$candidate" ]] || continue
+                physical_leaf=$(cd -P "$candidate" 2> /dev/null && pwd -P) || continue
+                if [[ "$physical_leaf" != "$candidate" ]]; then
+                    debug_log "Refusing symlinked Figma cache leaf: $candidate -> $physical_leaf"
+                    continue
+                fi
+                if mole_cleanup_targets_exist "$physical_leaf"/*; then
+                    cache_targets+=("$physical_leaf"/*)
+                fi
+            done
+        done
+    fi
+    mole_safe_clean_app_cache "Figma" "${cache_targets[@]}" "Figma cache"
+}
+
 # Design and creative tools.
 clean_design_tools() {
     safe_clean ~/Library/Caches/com.bohemiancoding.sketch3/* "Sketch cache"
@@ -1195,7 +1308,7 @@ clean_design_tools() {
     _dev_safe_clean_process_guarded _adobe_app_running "Adobe" "Adobe app caches" \
         ~/Library/Caches/com.adobe.*/* "Adobe app caches" || adobe_rc=$?
     [[ $adobe_rc -le 1 ]] || return "$adobe_rc"
-    safe_clean ~/Library/Caches/com.figma.Desktop/* "Figma cache"
+    clean_figma_desktop_caches
     local adobe_media_rc=0
     _dev_safe_clean_process_guarded _adobe_media_cache_running "Adobe" "Adobe media cache files" \
         ~/Library/Application\ Support/Adobe/Common/Media\ Cache\ Files/* "Adobe media cache files" || adobe_media_rc=$?
@@ -1812,7 +1925,7 @@ clean_autodesk_fusion_old_bundles() {
                 break
             fi
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$dir" "$size_kb" 1 true || continue
+                mole_record_user_sink_dry_run_target "$dir" "$size_kb" 1 true || continue
             fi
             total_size=$((total_size + size_kb))
             cleaned_count=$((cleaned_count + 1))
@@ -2186,12 +2299,14 @@ clean_system_utils() {
     safe_clean ~/Library/Application\ Support/WeType/DictUpdate/* "WeType dict update cache"
     # mihomo-party proxy tool (Electron)
     if [[ -d ~/Library/Application\ Support/mihomo-party ]]; then
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/Cache/* "mihomo-party cache"
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/Code\ Cache/* "mihomo-party code cache"
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/GPUCache/* "mihomo-party GPU cache"
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/DawnGraphiteCache/* "mihomo-party Dawn cache"
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/DawnWebGPUCache/* "mihomo-party WebGPU cache"
-        mole_safe_clean_app_cache "mihomo-party" ~/Library/Application\ Support/mihomo-party/logs/* "mihomo-party logs"
+        mole_safe_clean_app_cache "mihomo-party" \
+            ~/Library/Application\ Support/mihomo-party/Cache/* \
+            ~/Library/Application\ Support/mihomo-party/Code\ Cache/* \
+            ~/Library/Application\ Support/mihomo-party/GPUCache/* \
+            ~/Library/Application\ Support/mihomo-party/DawnGraphiteCache/* \
+            ~/Library/Application\ Support/mihomo-party/DawnWebGPUCache/* \
+            ~/Library/Application\ Support/mihomo-party/logs/* \
+            "mihomo-party cache"
     fi
     # Stash proxy tool
     safe_clean ~/Library/Caches/ws.stash.app.mac/* "Stash cache"
@@ -2217,6 +2332,53 @@ clean_remote_desktop() {
     safe_clean ~/Library/Caches/com.todesk.*/* "ToDesk cache"
     safe_clean ~/Library/Caches/com.sunlogin.*/* "Sunlogin cache"
 }
+# Append the regular files directly in $1 that are at least $2 seconds old,
+# limited to the lowercase extensions in $3 (space-separated, empty for any),
+# to _MOLE_STALE_FILES. Links, folders and unreadable mtimes are skipped; a
+# future mtime reads as fresh.
+_mole_collect_stale_regular_files() {
+    local dir="$1" min_age="$2" extensions="${3:-}" now entry mtime ext physical
+    [[ -d "$dir" && ! -L "$dir" ]] || return 0
+    # A linked parent (LarkShell, Citro Labs) would point the sweep elsewhere.
+    physical=$(cd -P "$dir" 2> /dev/null && pwd) || return 0
+    [[ "$physical" == "$dir" ]] || return 0
+    now=$(get_epoch_seconds)
+    [[ "$now" =~ ^[0-9]+$ ]] || return 0
+    for entry in "$dir"/*; do
+        [[ -f "$entry" && ! -L "$entry" ]] || continue
+        if [[ -n "$extensions" ]]; then
+            ext=$(printf '%s' "${entry##*.}" | LC_ALL=C /usr/bin/tr "[:upper:]" "[:lower:]")
+            [[ "$entry" == *.* && " $extensions " == *" $ext "* ]] || continue
+        fi
+        mtime=$(get_file_mtime "$entry")
+        [[ "$mtime" =~ ^[0-9]+$ && $mtime -gt 0 && $mtime -le $now ]] || continue
+        [[ $((now - mtime)) -ge $min_age ]] || continue
+        _MOLE_STALE_FILES+=("$entry")
+    done
+}
+
+# Update packages an app already installed or abandoned, outside Library/Caches
+# (the generic sweep owns that root): Feishu and Lark leave a download in
+# update_downloading (490 MB, five months old in one probe), ego lite and
+# Tabbit keep Chromium updater payloads in crx_cache (196 MB and 236 MB). Only
+# regular files at least three days old: a fresh one is a download in progress
+# or waiting for the next quit. Same rule as Mole Mac's Update Package
+# Leftovers; its container rows (QQ, Tencent Meeting) stay out, since reading
+# another app's container raises the app-data prompt.
+clean_update_package_leftovers() {
+    local -a _MOLE_STALE_FILES=()
+    local support="$HOME/Library/Application Support" dir
+    for dir in "$support/LarkShell/update/update_downloading" \
+        "$support/LarkInternational/update/update_downloading"; do
+        _mole_collect_stale_regular_files "$dir" 259200 "zip dmg pkg"
+    done
+    for dir in "$support/Citro Labs/EgoUpdater/crx_cache" "$support/Tabbit/TabbitUpdater/crx_cache"; do
+        _mole_collect_stale_regular_files "$dir" 259200 ""
+    done
+    [[ ${#_MOLE_STALE_FILES[@]} -gt 0 ]] || return 0
+    safe_clean "${_MOLE_STALE_FILES[@]}" "Update package leftovers"
+}
+
 # Main entry for GUI app cleanup.
 clean_user_gui_applications() {
     # Product and media App Container rows share one recursive-handle budget.
@@ -2230,7 +2392,8 @@ clean_user_gui_applications() {
         clean_media_players clean_video_players clean_download_managers \
         clean_gaming_platforms clean_translation_apps clean_screenshot_tools \
         clean_email_clients clean_task_apps clean_shell_utils clean_system_utils \
-        clean_note_apps clean_launcher_apps clean_remote_desktop; do
+        clean_note_apps clean_launcher_apps clean_remote_desktop \
+        clean_update_package_leftovers; do
         start_section_spinner "Scanning apps..."
         if [[ "$app_group" == "clean_download_managers" ]]; then
             group_rc=0

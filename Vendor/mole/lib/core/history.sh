@@ -628,15 +628,14 @@ history_load_operations() {
 
 history_load_deletions() {
     local log_file="$1"
-    local line timestamp mode size_kb status path
+    local timestamp mode size_kb status path
 
     history_reset_deletions
 
     [[ -f "$log_file" ]] || return 0
 
-    while IFS= read -r line || [[ -n "$line" ]]; do
-        [[ -z "$line" ]] && continue
-        IFS=$'\t' read -r timestamp mode size_kb status path <<< "$line"
+    # Split each row directly, keeping the last row even without a newline.
+    while IFS=$'\t' read -r timestamp mode size_kb status path || [[ -n "$timestamp" ]]; do
         [[ -n "${timestamp:-}" && -n "${mode:-}" && -n "${status:-}" ]] || continue
         HISTORY_DELETE_TIMESTAMPS+=("$timestamp")
         HISTORY_DELETE_MODES+=("$mode")
@@ -647,6 +646,7 @@ history_load_deletions() {
 }
 
 history_join_counts() {
+    local result_var="$7"
     local -a parts=()
     local removed="$1"
     local trashed="$2"
@@ -663,7 +663,7 @@ history_join_counts() {
     [[ "$other" -gt 0 ]] && parts+=("other $other")
 
     if [[ ${#parts[@]} -eq 0 ]]; then
-        printf 'no file actions'
+        printf -v "$result_var" 'no file actions'
         return 0
     fi
 
@@ -673,7 +673,7 @@ history_join_counts() {
         output+=", ${parts[$idx]}"
         idx=$((idx + 1))
     done
-    printf '%s' "$output"
+    printf -v "$result_var" '%s' "$output"
 }
 
 history_size_label() {
@@ -825,7 +825,7 @@ history_render_text() {
             _mole_escape_log_value started "$started"
             _mole_escape_log_value ended "$ended"
             _mole_escape_log_value size "$size"
-            count_text=$(history_join_counts "$removed" "$trashed" "$skipped" "$failed" "$rebuilt" "$other")
+            history_join_counts "$removed" "$trashed" "$skipped" "$failed" "$rebuilt" "$other" count_text
             if [[ "$failed_tasks" -gt 0 ]]; then
                 count_text+=", $failed_tasks optimize tasks failed"
             fi

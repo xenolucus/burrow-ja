@@ -873,16 +873,29 @@ _safe_clean_spinner_label() {
     if [[ "$item_name" == *[[:cntrl:]]* ]]; then
         item_name=$(mole_terminal_safe_text "$item_name")
     fi
-    # format_spinner_message keeps cols - 8; one more column of slack, since
-    # get_display_width counts the one-column "…" as two.
+    # format_spinner_message keeps cols - 8.
     local cols="${_MOLE_SAFE_CLEAN_COLS:-80}"
     [[ "$cols" =~ ^[0-9]+$ ]] || cols=80
-    local room=$((cols - 9 - ${#_MOLE_SAFE_CLEAN_LABEL} - 3))
+    local available=$((cols - 8))
+    local room=$((available - ${#_MOLE_SAFE_CLEAN_LABEL} - 4))
     if ((room < 8)); then
         return 0
     fi
     if [[ "$item_name" == *[![:ascii:]]* || ${#item_name} -gt $room ]]; then
-        item_name=$(truncate_middle_by_display_width "$item_name" "$room")
+        local shortened visible_width
+        shortened=$(truncate_middle_by_display_width "$item_name" "$room")
+        # The middle truncator counts every non-ASCII character as two, so
+        # its cut is never wider than get_display_width measures; the loop
+        # stays as a guard. A literal ellipsis can make the first cut match
+        # the input, so check labels with an ellipsis in either case.
+        while [[ "$item_name" == *[![:ascii:]]* && "$shortened" == *"…"* ]]; do
+            visible_width=$(get_display_width "$_MOLE_SAFE_CLEAN_LABEL · $shortened")
+            ((visible_width > available)) || break
+            room=$((room - (visible_width - available)))
+            ((room >= 8)) || return 0
+            shortened=$(truncate_middle_by_display_width "$item_name" "$room")
+        done
+        item_name="$shortened"
     fi
     _MOLE_SAFE_CLEAN_LABEL+=" · $item_name"
 }
@@ -1330,8 +1343,13 @@ _safe_clean_impl() {
                             fi
                         fi
                         action_rc=0
-                        record_dry_run_cleanup_target \
-                            "$path" "$size" 1 true || action_rc=$?
+                        # Same ownership refusal as safe_remove, the run's sink.
+                        if _mole_user_sink_refuses_on_ownership "$path"; then
+                            action_rc=1
+                        else
+                            record_dry_run_cleanup_target \
+                                "$path" "$size" 1 true || action_rc=$?
+                        fi
                         if mole_rc_timeout_or_signal "$action_rc"; then
                             cleanup_interrupt_rc=$action_rc
                             break
@@ -1458,8 +1476,16 @@ _safe_clean_impl() {
                         fi
                     fi
                     action_rc=0
-                    record_dry_run_cleanup_target \
-                        "$path" "$size_kb" 1 true || action_rc=$?
+                    # This preview's run removes through safe_remove, which
+                    # refuses an item another user owns that this user cannot
+                    # unlink, so the preview leaves it out too. Sudo sinks
+                    # record through the same function and keep their rows.
+                    if _mole_user_sink_refuses_on_ownership "$path"; then
+                        action_rc=1
+                    else
+                        record_dry_run_cleanup_target \
+                            "$path" "$size_kb" 1 true || action_rc=$?
+                    fi
                     if mole_rc_timeout_or_signal "$action_rc"; then
                         cleanup_interrupt_rc=$action_rc
                         break

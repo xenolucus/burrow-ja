@@ -110,7 +110,7 @@ clean_trash() {
                 [[ $validate_rc -eq 0 ]] || continue
                 if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
                     local _MOLE_DRY_RUN_TARGET_PREVALIDATED=true
-                    record_dry_run_cleanup_target "$trash_item" "$trash_item_kb" 1 "$trash_size_known" || continue
+                    mole_record_user_sink_dry_run_target "$trash_item" "$trash_item_kb" 1 "$trash_size_known" || continue
                 fi
                 preview_count=$((preview_count + 1))
             done < <(command find "$HOME/.Trash" -mindepth 1 -maxdepth 1 -print0 2> /dev/null || true)
@@ -205,6 +205,60 @@ _user_cache_deno_delete_guard() {
     return 0
 }
 
+# Chromium keeps a profile's live HTTP cache at the same path under
+# ~/Library/Caches as the profile under Application Support (Brave's
+# BraveSoftware/Brave-Browser, Microsoft Edge, Vivaldi, Arc/User Data,
+# Dia/User Data, Chromium), and holds a SingletonLock in its user-data folder
+# while it runs. The live-owner gate in file_ops.sh asks only about reverse-DNS
+# cache names, so for a plain one this walks the cache root and the two levels
+# below it and asks the lock at the same place under Application Support (the
+# one to three levels app_support_path_held_by_singleton reads), listing no
+# Application Support folder. It descends only where the Application Support
+# mirror exists and never through a link, so a large cache such as Yarn's or a
+# folder linked to another volume costs one stat. Returns 0 while a lock names
+# a live pid or cannot be read.
+_user_cache_root_held_by_singleton() {
+    local cache_root="${1%/}"
+    local caches="$HOME/Library/Caches"
+    case "$cache_root" in
+        "$caches"/?*) ;;
+        *) return 1 ;;
+    esac
+    local first="${cache_root#"$caches"/}"
+    [[ "${first%%/*}" != *.* ]] || return 1
+    local support="$HOME/Library/Application Support"
+    local -a lock_level=("$cache_root") lock_next=()
+    local depth folder mirror child
+    for depth in 0 1 2; do
+        lock_next=()
+        for folder in "${lock_level[@]}"; do
+            [[ -d "$folder" && ! -L "$folder" ]] || continue
+            mirror="$support/${folder#"$caches"/}"
+            [[ -d "$mirror" ]] || continue
+            app_support_dir_in_use "$mirror" && return 0
+            [[ $depth -lt 2 ]] || continue
+            for child in "$folder"/*/; do
+                lock_next+=("${child%/}")
+            done
+        done
+        [[ ${#lock_next[@]} -gt 0 ]] || return 1
+        lock_level=("${lock_next[@]}")
+    done
+    return 1
+}
+
+# Delete-time callback for the User app cache sweep: the Deno root check, whose
+# refusal stops the batch, then the browser lock of this root, whose refusal
+# skips only it, so a browser started during the sweep keeps its cache.
+_user_cache_delete_guard() {
+    local candidate="${1:-}"
+    _MOLE_SAFE_CLEAN_SKIP_PATH=""
+    _user_cache_deno_delete_guard "$candidate" || return $?
+    _user_cache_root_held_by_singleton "$candidate" || return 0
+    _MOLE_SAFE_CLEAN_SKIP_PATH="$candidate"
+    return 1
+}
+
 # Log globs must never enumerate through redirected roots. Bind the directories
 # before enumeration and again after sizing and at the last deletion boundary.
 _user_log_delete_guard() {
@@ -292,8 +346,23 @@ clean_user_essentials() {
             # cleans only after Chrome quits; Android Studio has its own row.
             # Swept whole, it went while Chrome ran and failed every run
             # (seven times in one 2026-10-28 bundle), like Mole Mac's
-            # coveredCachePrefixes.
-            [[ "${user_cache_target##*/}" == "Google" ]] && continue
+            # coveredCachePrefixes. mbx holds a Rust build cache's cargo
+            # shims, scheduler leases and the live target folders checkouts
+            # link into, and evicts to its own size budget; swept whole it
+            # broke builds, so it stays out like Mole Mac's protected root.
+            # Homebrew's api/ holds formula_names.txt and cask_names.txt that
+            # zsh completion rebuilds from (#2110); the Homebrew section runs
+            # `brew cleanup` for downloads, like Mole Mac's downloads-only row.
+            case "${user_cache_target##*/}" in
+                Google | mbx | Homebrew) continue ;;
+            esac
+            # Another Chromium browser keeps its live cache in a plain folder
+            # here the way Chrome does under Google; leave it while that
+            # browser runs and sweep it as before once it quits.
+            if _user_cache_root_held_by_singleton "$user_cache_target"; then
+                debug_log "User app cache: kept ${user_cache_target##*/}, its app is running"
+                continue
+            fi
             case "$deno_cache_root" in
                 "$user_cache_target" | "$user_cache_target"/*) continue ;;
             esac
@@ -314,7 +383,7 @@ clean_user_essentials() {
         # sink guard re-asks after every other check, immediately before rm,
         # because safe_remove does real work between the two.
         local _MOLE_SAFE_REMOVE_FINAL_GUARD=_user_cache_deno_delete_guard
-        safe_clean_guarded _user_cache_deno_delete_guard \
+        safe_clean_guarded _user_cache_delete_guard \
             "${user_cache_targets[@]}" "User app cache" || user_cache_rc=$?
         if [[ $user_cache_rc -eq 75 ]]; then
             echo -e "  ${GRAY}${ICON_WARNING}${NC} User app cache · stopped (Deno root changed during cleanup)"
@@ -562,7 +631,7 @@ _clean_mail_downloads() {
                     local remove_rc=1
                     if [[ "$dry_run_mode" == "true" ]]; then
                         if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                            record_dry_run_cleanup_target "$file_path" "$file_size_kb" 1 true || continue
+                            mole_record_user_sink_dry_run_target "$file_path" "$file_size_kb" 1 true || continue
                         fi
                         MOLE_DRY_RUN=1 safe_remove "$file_path" true "$file_size_kb" && remove_rc=0
                     elif _MOLE_SAFE_REMOVE_FINAL_GUARD=_mail_attachment_delete_guard safe_remove \
@@ -794,6 +863,10 @@ is_brave_browser_running() {
     mole_pgrep_any -x "Brave Browser"
 }
 
+is_chromium_running() {
+    mole_pgrep_any -x "Chromium"
+}
+
 _firefox_process_state() {
     mole_pgrep_any -x "Firefox"
 }
@@ -1011,7 +1084,7 @@ clean_edge_updater_old_versions() {
         fi
         if [[ "$DRY_RUN" == "true" ]]; then
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$dir" "$size_kb" 1 "$size_known" || continue
+                mole_record_user_sink_dry_run_target "$dir" "$size_kb" 1 "$size_known" || continue
             fi
             total_size=$((total_size + size_kb))
             cleaned_count=$((cleaned_count + 1))
@@ -1083,7 +1156,7 @@ clean_support_app_data() {
     local crash_reporter_dir="$HOME/Library/Application Support/CrashReporter"
     if [[ -d "$crash_reporter_dir" && ! -L "$crash_reporter_dir" ]]; then
         local crash_reporter_rc=0
-        safe_find_delete "$crash_reporter_dir" "*" "$support_age_days" "f" || crash_reporter_rc=$?
+        safe_find_delete "$crash_reporter_dir" "*" "$support_age_days" "f" "Crash reporter data" || crash_reporter_rc=$?
         if mole_rc_signal "$crash_reporter_rc"; then
             return "$crash_reporter_rc"
         fi
@@ -1439,7 +1512,7 @@ clean_handoff_pasteboard_cache() {
         mole_rc_timeout "$size_rc" && size_known=false
         if [[ "$DRY_RUN" == "true" ]]; then
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$item" "$item_kb" 1 "$size_known" || continue
+                mole_record_user_sink_dry_run_target "$item" "$item_kb" 1 "$size_known" || continue
             fi
             cleaned_count=$((cleaned_count + 1))
             total_kb=$((total_kb + item_kb))
@@ -1734,7 +1807,7 @@ clean_group_container_caches() {
                         # SQLite guards have all run after sizing. Avoid only
                         # repeating that complete eligibility pass.
                         local _MOLE_DRY_RUN_TARGET_PREVALIDATED=true
-                        record_dry_run_cleanup_target \
+                        mole_record_user_sink_dry_run_target \
                             "$item" "$item_size" 1 "$candidate_size_known" || action_rc=$?
                     fi
                 else
@@ -2042,7 +2115,7 @@ clean_external_volume_target() {
                 continue
             fi
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$target_path" "$size_kb" 1 true || continue
+                mole_record_user_sink_dry_run_target "$target_path" "$size_kb" 1 true || continue
             fi
             found_any=true
             cleaned_count=$((cleaned_count + 1))
@@ -2096,7 +2169,7 @@ clean_external_volume_target() {
                 continue
             fi
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                record_dry_run_cleanup_target "$metadata_file" "$size_kb" 1 "$metadata_size_known" || continue
+                mole_record_user_sink_dry_run_target "$metadata_file" "$size_kb" 1 "$metadata_size_known" || continue
             fi
             found_any=true
             cleaned_count=$((cleaned_count + 1))
@@ -2186,7 +2259,15 @@ clean_browsers() {
     done
     safe_clean ~/Library/Application\ Support/Google/GoogleUpdater/crx_cache/* "GoogleUpdater CRX cache"
     safe_clean ~/Library/Application\ Support/Google/GoogleUpdater/*.old "GoogleUpdater old files"
-    safe_clean ~/Library/Caches/Chromium/* "Chromium cache"
+    # Chromium's Caches root holds its live HTTP disk cache like Chrome's.
+    if mole_cleanup_targets_exist "$HOME/Library/Caches/Chromium"/*; then
+        if mole_clean_process_guard is_chromium_running "Chromium started"; then
+            _user_safe_clean_process_guarded is_chromium_running "Chromium" "Chromium cache" \
+                ~/Library/Caches/Chromium/* "Chromium cache" || true
+        else
+            mole_report_guard_stop "Chromium cache" mole_defer_cleanup_family "Chromium"
+        fi
+    fi
     safe_clean ~/Library/Caches/com.microsoft.edgemac/* "Edge cache"
     # Arc Browser.
     if [[ -d ~/Library/Application\ Support/Arc ]]; then
@@ -2586,6 +2667,10 @@ clean_tart_caches() {
         return 0
     fi
 
+    # The prune already ran, so log it before a signal during the recount
+    # stops the run.
+    log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: Tart caches"
+
     local reclaimed_kb=0
     local reclaimed_known=false
     local post_rc=0
@@ -2607,9 +2692,6 @@ clean_tart_caches() {
         echo -e "  ${GREEN}${ICON_SUCCESS}${NC} Tart caches · pruned"
     fi
     note_activity
-    # The prune already ran, so log it before a signal during the recount
-    # stops the run.
-    log_operation "${MOLE_CURRENT_COMMAND:-clean}" "REMOVED" "$cache_root" "owner command: Tart caches"
     if [[ $post_rc -ne 0 ]]; then
         mole_item_size_continues "$post_rc" || return $?
     fi
@@ -2698,24 +2780,6 @@ app_support_dir_has_regenerable_cache_markers() {
         [[ -e "$marker" ]] && return 0
     done
 
-    return 1
-}
-
-# Chromium and Electron apps hold <userData>/SingletonLock, a link to
-# "<host>-<pid>", while they run and remove it when they quit, so a live pid
-# means the Code Cache and GPUCache beside it are in use (Docker Desktop,
-# VS Code, T3 Code). Returns 0 while the app runs or the lock cannot be read,
-# 1 when there is no lock or its pid is gone.
-app_support_dir_in_use() {
-    local lock="$1/SingletonLock"
-    [[ -L "$lock" ]] || return 1
-    local target="" pid=""
-    target=$(readlink "$lock" 2> /dev/null) || return 0
-    pid="${target##*-}"
-    [[ "$pid" =~ ^[0-9]+$ && "$pid" -gt 0 ]] || return 0
-    kill -0 "$pid" 2> /dev/null && return 0
-    # kill -0 also fails for a live process another user owns.
-    ps -p "$pid" > /dev/null 2>&1 && return 0
     return 1
 }
 
@@ -2822,7 +2886,7 @@ clean_application_support_logs() {
                     start_section_spinner "Scanning Application Support... $app_count/$total_apps [$app_label, bulk clean]"
                     if [[ "$DRY_RUN" == "true" ]]; then
                         if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                            record_dry_run_cleanup_target "$candidate" 0 1 false || continue
+                            mole_record_user_sink_dry_run_target "$candidate" 0 1 false || continue
                         fi
                     else
                         # Remove entire candidate directory in one go
@@ -2859,7 +2923,7 @@ clean_application_support_logs() {
                         fi
                     fi
                     if [[ "$DRY_RUN" == "true" ]] && declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                        record_dry_run_cleanup_target "$item" "$item_size_kb" 1 "$item_size_known" || continue
+                        mole_record_user_sink_dry_run_target "$item" "$item_size_kb" 1 "$item_size_known" || continue
                     fi
                     if [[ "$item_size_known" == "true" ]]; then
                         candidate_size_bytes=$((candidate_size_bytes + item_size_bytes))
@@ -2917,7 +2981,7 @@ clean_application_support_logs() {
                     start_section_spinner "Scanning Application Support... group [$container_label, bulk clean]"
                     if [[ "$DRY_RUN" == "true" ]]; then
                         if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                            record_dry_run_cleanup_target "$candidate" 0 1 false || continue
+                            mole_record_user_sink_dry_run_target "$candidate" 0 1 false || continue
                         fi
                     else
                         safe_remove "$candidate" true > /dev/null 2>&1 || true
@@ -2950,7 +3014,7 @@ clean_application_support_logs() {
                         fi
                     fi
                     if [[ "$DRY_RUN" == "true" ]] && declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
-                        record_dry_run_cleanup_target "$item" "$item_size_kb" 1 "$item_size_known" || continue
+                        mole_record_user_sink_dry_run_target "$item" "$item_size_kb" 1 "$item_size_known" || continue
                     fi
                     if [[ "$item_size_known" == "true" ]]; then
                         candidate_size_bytes=$((candidate_size_bytes + item_size_bytes))
@@ -3095,7 +3159,7 @@ clean_cached_device_firmware() {
             [[ $guard_rc -eq 0 ]] || return 0
             if declare -f record_dry_run_cleanup_target > /dev/null 2>&1; then
                 local record_rc=0
-                record_dry_run_cleanup_target "$ipsw" "$size_kb" 1 "$size_known" || record_rc=$?
+                mole_record_user_sink_dry_run_target "$ipsw" "$size_kb" 1 "$size_known" || record_rc=$?
                 if mole_rc_timeout_or_signal "$record_rc"; then
                     _mole_record_clean_cancellation "$record_rc"
                     return "$record_rc"
@@ -3187,8 +3251,166 @@ jetbrains_stale_version_dirs() {
         '
 }
 
+# A basic ("...", with only \" and \\ escapes) or literal ('...') TOML key, as
+# Codex writes `[projects."<path>"]`; anything else prints nothing.
+_mole_toml_quoted_key() {
+    local key="$1" quote inner result="" ch escaping=false i
+    [[ ${#key} -ge 2 ]] || return 1
+    quote="${key:0:1}"
+    [[ ("$quote" == '"' || "$quote" == "'") && "${key: -1}" == "$quote" ]] || return 1
+    inner="${key:1:${#key}-2}"
+    if [[ "$quote" == "'" ]]; then
+        [[ "$inner" != *"'"* ]] || return 1
+        printf '%s\n' "$inner"
+        return 0
+    fi
+    for ((i = 0; i < ${#inner}; i++)); do
+        ch="${inner:i:1}"
+        if [[ "$escaping" == "true" ]]; then
+            [[ "$ch" == '"' || "$ch" == "\\" ]] || return 1
+            result+="$ch"
+            escaping=false
+        elif [[ "$ch" == "\\" ]]; then
+            escaping=true
+        elif [[ "$ch" == '"' ]]; then
+            return 1
+        else
+            result+="$ch"
+        fi
+    done
+    [[ "$escaping" == "false" ]] || return 1
+    printf '%s\n' "$result"
+}
+
+# The project folders Claude Code (`projects` in ~/.claude.json) and Codex (the
+# `[projects."<path>"]` tables of ~/.codex/config.toml and every thread's cwd
+# in its newest state_N.sqlite) record for themselves, one per line. Read only
+# to find repositories whose own worktree containers sit outside the project
+# roots (Mole Mac 3354e06a7, maintainer 2026-11-25). plutil and sqlite3 ship
+# with macOS, so no developer-tools prompt; an unreadable source adds nothing.
+mole_agent_recorded_project_folders() {
+    local state="$HOME/.claude.json" config="$HOME/.codex/config.toml" size line key
+    if [[ -f "$state" && ! -L "$state" ]]; then
+        size=$(/usr/bin/stat -f %z "$state" 2> /dev/null || echo 0)
+        if [[ "$size" =~ ^[0-9]+$ && "$size" -le 32000000 ]]; then
+            run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" /usr/bin/plutil -extract projects raw -o - "$state" 2> /dev/null || true
+        fi
+    fi
+    if [[ -f "$config" && ! -L "$config" ]]; then
+        size=$(/usr/bin/stat -f %z "$config" 2> /dev/null || echo 0)
+        if [[ "$size" =~ ^[0-9]+$ && "$size" -le 1000000 ]]; then
+            while IFS= read -r line || [[ -n "$line" ]]; do
+                line="${line#"${line%%[![:space:]]*}"}"
+                line="${line%"${line##*[![:space:]]}"}"
+                [[ "$line" == "[projects."*"]" && "$line" != *"]]" ]] || continue
+                key="${line#\[projects.}"
+                _mole_toml_quoted_key "${key%\]}" || true
+            done < "$config"
+        fi
+    fi
+    local db="" candidate number best=-1
+    for candidate in "$HOME"/.codex/state_*.sqlite; do
+        [[ -f "$candidate" && ! -L "$candidate" ]] || continue
+        number="${candidate##*/state_}"
+        number="${number%.sqlite}"
+        [[ "$number" =~ ^[0-9]+$ ]] || continue
+        if ((10#$number > best)); then
+            best=$((10#$number))
+            db="$candidate"
+        fi
+    done
+    if [[ -n "$db" && -x /usr/bin/sqlite3 ]]; then
+        run_with_timeout "$MOLE_TIMEOUT_MEDIUM_PROBE_SEC" /usr/bin/sqlite3 -readonly "$db" "SELECT DISTINCT cwd FROM threads" 2> /dev/null || true
+    fi
+}
+
+# The main checkouts holding the recorded folders, one per line, each spelled as
+# on disk. Only folders under home count, never ~/Library, a first-level dot
+# folder, Desktop, Documents or Downloads (looking there raises a privacy prompt
+# without Full Disk Access, and the first two may sync to iCloud), anything below
+# a mount point inside home (a lost network share blocks the first lstat), or a
+# path with a link in it, so a link into Documents is never followed. A folder
+# inside an agent worktree counts as its repository's; one whose nearest .git is
+# a file (a worktree or submodule) has no main checkout here.
+mole_agent_recorded_repositories() {
+    local base="$HOME/" line raw path below cur repository considered=0 steps physical_home
+    local -a mounts=() seen=()
+    # pwd -P below spells a checkout through any link in HOME itself.
+    physical_home=$(cd "$HOME" 2> /dev/null && /bin/pwd -P) || physical_home="${base%/}"
+    while IFS= read -r line; do
+        line="${line#* on }"
+        line="${line% (*}"
+        [[ "$line" == "$base"* ]] && mounts+=("$line")
+    done < <(/sbin/mount 2> /dev/null)
+
+    _mole_agent_record_allowed() {
+        local candidate="$1" first mount prefix rest part
+        [[ "$candidate" == "$base"* ]] || return 1
+        rest="${candidate#"$base"}"
+        first="${rest%%/*}"
+        [[ -n "$first" && "$first" != .* ]] || return 1
+        case "$(printf '%s' "$first" | LC_ALL=C tr '[:upper:]' '[:lower:]')" in
+            library | desktop | documents | downloads) return 1 ;;
+        esac
+        for mount in "${mounts[@]+"${mounts[@]}"}"; do
+            [[ "$candidate" == "$mount" || "$candidate" == "$mount/"* ]] && return 1
+        done
+        prefix="${base%/}"
+        while [[ -n "$rest" ]]; do
+            part="${rest%%/*}"
+            [[ "$rest" == */* ]] && rest="${rest#*/}" || rest=""
+            prefix="$prefix/$part"
+            [[ ! -L "$prefix" ]] || return 1
+        done
+        return 0
+    }
+
+    while IFS= read -r raw; do
+        [[ $considered -lt 4000 ]] || break
+        [[ "$raw" == "$base"* && "/$raw/" != *"/./"* && "/$raw/" != *"/../"* ]] || continue
+        path=$(printf '%s' "$raw" | tr -s '/')
+        path="${path%/}"
+        # Cut at a worktree container below HOME only: HOME's own path may
+        # hold one, as a checkout's test HOME does.
+        below="${path#"$base"}"
+        below="${below%%/.claude/worktrees/*}"
+        below="${below%%/.codex/worktrees/*}"
+        path="$base$below"
+        _mole_agent_record_allowed "$path" || continue
+        considered=$((considered + 1))
+        cur="$path"
+        repository=""
+        for ((steps = 0; steps < 16; steps++)); do
+            [[ "$cur" == "$base"* ]] || break
+            if [[ -L "$cur/.git" ]]; then
+                break
+            elif [[ -d "$cur/.git" ]]; then
+                repository="$cur"
+                break
+            elif [[ -e "$cur/.git" ]]; then
+                break
+            fi
+            cur="${cur%/*}"
+        done
+        [[ -n "$repository" ]] || continue
+        repository=$(cd "$repository" 2> /dev/null && /bin/pwd -P) || continue
+        [[ "$repository" == "$physical_home/"* ]] && repository="$base${repository#"$physical_home/"}"
+        _mole_agent_record_allowed "$repository" || continue
+        local known=false entry
+        for entry in "${seen[@]+"${seen[@]}"}"; do
+            [[ "$entry" == "$repository" ]] && known=true && break
+        done
+        [[ "$known" == "false" ]] || continue
+        seen+=("$repository")
+        printf '%s\n' "$repository"
+    done < <(mole_agent_recorded_project_folders)
+    unset -f _mole_agent_record_allowed
+}
+
 # List every agent worktree container once, NUL-separated: the fixed Codex and
-# T3 Code containers first, then each `.claude/worktrees` under the project roots.
+# T3 Code containers first, then each `.claude/worktrees` under the project roots,
+# then the `.claude/worktrees` and `.codex/worktrees` of every repository Claude
+# Code and Codex record as a project. Containers are told apart by identity.
 agent_worktree_containers() {
     local -a roots=(
         "$HOME/code" "$HOME/Code" "$HOME/dev" "$HOME/Projects"
@@ -3196,11 +3418,21 @@ agent_worktree_containers() {
         "$HOME/Development" "$HOME/Developer" "$HOME/www" "$HOME/src"
     )
     local container
+    local -a printed_ids=()
+    _mole_print_container_once() {
+        local id seen_id
+        id=$(/usr/bin/stat -f '%d:%i' "$1" 2> /dev/null) || return 0
+        for seen_id in "${printed_ids[@]+"${printed_ids[@]}"}"; do
+            [[ "$seen_id" == "$id" ]] && return 0
+        done
+        printed_ids+=("$id")
+        printf '%s\0' "$1"
+    }
     # The Codex and T3 Code apps keep every worktree under one fixed container
     # outside any project root, so the find below never reaches them.
     for container in "$HOME/.codex/worktrees" "$HOME/.t3/worktrees"; do
         if [[ -d "$container" && ! -L "$container" ]]; then
-            printf '%s\0' "$container"
+            _mole_print_container_once "$container"
         fi
     done
 
@@ -3232,9 +3464,22 @@ agent_worktree_containers() {
             done
             [[ "$already_scanned" == "false" ]] || continue
             listed_containers+=("$container")
-            printf '%s\0' "$container"
+            _mole_print_container_once "$container"
         done < <(run_with_timeout "$MOLE_TIMEOUT_PKG_CLEANUP_SEC" command find "$physical_root" -maxdepth 6 -type d -path "*/.claude/worktrees" -prune -print0 2> /dev/null)
     done
+
+    # Repositories outside every root: a user's two clean worktrees held 2.5 GB
+    # in one (Mole Mac diagnose 20261122-195231). Only real folders count, so a
+    # .claude linked into Documents or iCloud Drive is not listed through it.
+    local repository name
+    while IFS= read -r repository; do
+        for name in .claude .codex; do
+            container="$repository/$name/worktrees"
+            [[ -d "$repository/$name" && ! -L "$repository/$name" && -d "$container" && ! -L "$container" ]] || continue
+            _mole_print_container_once "$container"
+        done
+    done < <(mole_agent_recorded_repositories)
+    unset -f _mole_print_container_once
 }
 
 # AI coding agents create full checkouts that accumulate silently: Claude Code
